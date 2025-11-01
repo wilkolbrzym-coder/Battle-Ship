@@ -46,10 +46,18 @@
     <main>
         <div class="board-container">
             <h2>Twoja Flota (Bot)</h2>
-            <div id="player-board" class="board"></div>
+            <div class="board-wrapper">
+                <div class="coords coords-top" id="player-coords-top"></div>
+                <div class="coords coords-left" id="player-coords-left"></div>
+                <div id="player-board" class="board"></div>
+            </div>
         </div>
         <div class="controls-container">
             <h2>Panel Sterowania</h2>
+            <div id="shot-input-container" class="hidden">
+                 <input type="text" id="shot-input" placeholder="Wpisz strzał (np. A5)">
+                 <button id="submit-shot-btn">Zatwierdź strzał</button>
+            </div>
             <div class="bot-communication">
                 <p>Bot sugeruje strzał w pole: <span id="bot-suggestion">...</span></p>
             </div>
@@ -62,7 +70,11 @@
         </div>
         <div class="board-container">
             <h2>Plansza Przeciwnika</h2>
-            <div id="opponent-board" class="board"></div>
+             <div class="board-wrapper">
+                <div class="coords coords-top" id="opponent-coords-top"></div>
+                <div class="coords coords-left" id="opponent-coords-left"></div>
+                <div id="opponent-board" class="board"></div>
+            </div>
         </div>
     </main>
 
