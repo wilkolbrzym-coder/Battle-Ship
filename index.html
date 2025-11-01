@@ -22,23 +22,7 @@
 
     <header>
         <h1>Bitwa Morska</h1>
-        <div class="settings">
-            <button id="settings-btn" class="icon-btn">
-                <span class="material-symbols-outlined">settings</span>
-            </button>
-        </div>
     </header>
-
-    <div id="settings-modal" class="overlay hidden">
-        <div class="modal">
-            <h2>Panel Taktyczny</h2>
-            <div class="setting-option">
-                <label for="visualize-brain-toggle">Wizualizator Mózgu Bota</label>
-                <input type="checkbox" id="visualize-brain-toggle">
-            </div>
-            <button id="close-settings-btn" class="board-size-btn">Zamknij</button>
-        </div>
-    </div>
 
     <div id="end-screen" class="overlay hidden">
         <div class="modal">
@@ -65,12 +49,17 @@
             <div class="bot-communication">
                 <p>Bot sugeruje strzał w pole: <span id="bot-suggestion">...</span></p>
             </div>
+            <div id="player-override-container" class="player-shot-container">
+                 <input type="text" id="player-shot-input" placeholder="Twój strzał (np. B6)">
+                 <button id="submit-player-shot-btn">Strzelaj!</button>
+            </div>
             <div class="action-buttons">
                 <button id="btn-miss">Pudło</button>
                 <button id="btn-hit">Trafiony</button>
                 <button id="btn-damaged">Uszkodzony</button>
                 <button id="btn-sunk">Zatopiony</button>
             </div>
+            <button id="btn-undo">Cofnij ostatni ruch</button>
         </div>
         <div class="board-container">
             <h2>Plansza Przeciwnika</h2>
