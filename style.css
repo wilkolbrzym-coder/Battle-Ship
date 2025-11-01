@@ -1,0 +1,194 @@
+:root {
+    /* Kolory w stylu Material Design 3 - Ciemny motyw */
+    --md-sys-color-primary: #9BFAFF;
+    --md-sys-color-on-primary: #00363A;
+    --md-sys-color-primary-container: #004F54;
+    --md-sys-color-on-primary-container: #B8FBFF;
+    --md-sys-color-background: #191C1D;
+    --md-sys-color-on-background: #E1E3E3;
+    --md-sys-color-surface: #191C1D;
+    --md-sys-color-on-surface: #E1E3E3;
+    --md-sys-color-surface-variant: #3F4849;
+    --md-sys-color-on-surface-variant: #BFC8C9;
+    --md-sys-color-outline: #899293;
+
+    --font-family-sans-serif: 'Roboto', sans-serif;
+    --cell-size: 3.5vmin;
+}
+
+body {
+    background-color: var(--md-sys-color-background);
+    color: var(--md-sys-color-on-background);
+    font-family: var(--font-family-sans-serif);
+    margin: 0;
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+}
+
+header {
+    width: 100%;
+    text-align: center;
+    margin-bottom: 2rem;
+}
+
+h1, h2 {
+    font-weight: 400;
+}
+
+main {
+    display: flex;
+    justify-content: space-around;
+    width: 100%;
+    max-width: 1600px;
+    gap: 2rem;
+}
+
+.board-container {
+    text-align: center;
+}
+
+.board {
+    display: grid;
+    grid-template-columns: repeat(var(--grid-size), var(--cell-size));
+    grid-template-rows: repeat(var(--grid-size), var(--cell-size));
+    border: 1px solid var(--md-sys-color-outline);
+    background-color: var(--md-sys-color-surface-variant);
+}
+
+.cell {
+    width: var(--cell-size);
+    height: var(--cell-size);
+    border: 1px solid var(--md-sys-color-outline);
+    box-sizing: border-box;
+    cursor: pointer;
+    transition: background-color 0.3s;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: calc(var(--cell-size) * 0.8);
+}
+
+.cell:hover {
+    background-color: var(--md-sys-color-surface-variant);
+}
+
+/* Stany komórek */
+.cell.miss::after {
+    font-family: 'Material Symbols Outlined';
+    content: 'close';
+    color: var(--md-sys-color-on-surface);
+    font-weight: 300;
+}
+
+.cell.hit::after {
+    font-family: 'Material Symbols Outlined';
+    content: 'explosion'; /* Placeholder, można zmienić na inną ikonę */
+    color: var(--md-sys-color-primary);
+}
+
+.cell.damaged {
+    background-color: orange;
+}
+
+.cell.sunk {
+    background-color: red;
+}
+
+.cell.ship {
+    background-color: var(--md-sys-color-primary-container);
+}
+
+
+.controls-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1.5rem;
+    padding: 2rem;
+    background-color: var(--md-sys-color-surface-variant);
+    border-radius: 16px;
+}
+
+.bot-communication {
+    text-align: center;
+}
+
+#bot-suggestion {
+    font-weight: bold;
+    color: var(--md-sys-color-primary);
+    font-size: 1.5rem;
+}
+
+.action-buttons {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+}
+
+.action-buttons button {
+    background-color: var(--md-sys-color-primary-container);
+    color: var(--md-sys-color-on-primary-container);
+    border: none;
+    padding: 1rem 1.5rem;
+    border-radius: 24px;
+    cursor: pointer;
+    font-size: 1rem;
+    transition: background-color 0.3s;
+}
+
+.action-buttons button:hover {
+    background-color: var(--md-sys-color-primary);
+    color: var(--md-sys-color-on-primary);
+}
+
+/* Ekran startowy i modale */
+.overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.8);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+.modal {
+    background-color: var(--md-sys-color-surface-variant);
+    padding: 3rem;
+    border-radius: 24px;
+    text-align: center;
+}
+
+.board-size-options {
+    display: flex;
+    gap: 1rem;
+    margin-top: 1.5rem;
+}
+
+.board-size-btn {
+    background-color: var(--md-sys-color-primary-container);
+    color: var(--md-sys-color-on-primary-container);
+    border: none;
+    padding: 1rem 1.5rem;
+    border-radius: 24px;
+    cursor: pointer;
+    font-size: 1rem;
+    transition: background-color 0.3s;
+}
+
+.board-size-btn:hover {
+    background-color: var(--md-sys-color-primary);
+    color: var(--md-sys-color-on-primary);
+}
+
+.hidden {
+    display: none;
+}
