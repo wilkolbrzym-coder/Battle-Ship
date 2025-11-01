@@ -96,6 +96,12 @@ function handlePlayerBoardClick(event) {
     const y = parseInt(cell.dataset.y);
     const cellState = playerGrid[y][x];
 
+    // Sprawdzenie, czy pole było już ostrzelane
+    if ((typeof cellState === 'object' && cellState.hit) || cellState === 'miss') {
+        alert("To pole było już ostrzelane!");
+        return;
+    }
+
     if (typeof cellState === 'object' && cellState !== null && !cellState.hit) {
         // Trafienie w statek
         cellState.hit = true;
@@ -157,45 +163,55 @@ function handleOpponentBoardClick(event) {
 
 /**
  * Oblicza mapę prawdopodobieństwa umieszczenia statków na planszy.
+ * @param {Array<Array<string>>} grid - Siatka do analizy.
  * @returns {Array<Array<number>>} - Siatka z wartościami prawdopodobieństwa dla każdego pola.
  */
-function calculateProbabilityMap() {
+function calculateProbabilityMap(grid) {
     const size = currentConfig.size;
-    const probMap = Array(size).fill(null).map(() => Array(size).fill(0));
+    const finalProbMap = Array(size).fill(null).map(() => Array(size).fill(0));
 
-    // Użyj tylko statków, które jeszcze nie zostały zatopione
-    const shipsToPlace = opponentShips.filter(s => s.count > 0).flatMap(ship => Array(ship.count).fill(ship));
+    const remainingShips = opponentShips.filter(s => s.count > 0);
+    if (remainingShips.length === 0) return finalProbMap;
 
-    if (shipsToPlace.length === 0) return probMap; // Zwróć pustą mapę, jeśli nie ma już statków
+    const smallestShipSize = Math.min(...remainingShips.map(s => s.size));
 
-    const smallestShipSize = Math.min(...shipsToPlace.map(s => s.size));
-
-    for (const ship of shipsToPlace) {
-        const shipSize = ship.size;
-        for (let y = 0; y < size; y++) {
+    // Stwórz osobną mapę gęstości dla każdego typu statku
+    for (const shipType of remainingShips) {
+        const shipSize = shipType.size;
+        const shipProbMap = Array(size).fill(null).map(() => Array(size).fill(0));
+        for (let i = 0; i < shipType.count; i++) {
+            for (let y = 0; y < size; y++) {
+                for (let x = 0; x < size; x++) {
+                    // Poziomo
+                    if (x + shipSize <= size && canPlaceShipForProbability(opponentGrid, x, y, shipSize, false)) {
+                        for (let k = 0; k < shipSize; k++) shipProbMap[y][x + k]++;
+                    }
+                    // Pionowo
+                    if (y + shipSize <= size && canPlaceShipForProbability(opponentGrid, x, y, shipSize, true)) {
+                        for (let k = 0; k < shipSize; k++) shipProbMap[y + k][x]++;
+                    }
+                }
+            }
+        }
+        // Dodaj mapę tego typu statku do finalnej mapy
+        for(let y = 0; y < size; y++) {
             for (let x = 0; x < size; x++) {
-                // Sprawdź w poziomie
-                if (x + shipSize <= size && canPlaceShipForProbability(opponentGrid, x, y, shipSize, false)) {
-                    for (let i = 0; i < shipSize; i++) probMap[y][x + i]++;
-                }
-                // Sprawdź w pionie
-                if (y + shipSize <= size && canPlaceShipForProbability(opponentGrid, x, y, shipSize, true)) {
-                    for (let i = 0; i < shipSize; i++) probMap[y + i][x]++;
-                }
+                finalProbMap[y][x] += shipProbMap[y][x];
             }
         }
     }
 
-    // Zastosowanie strategii Parity - zwiększ wagę pól "szachownicy"
+    // Zastosuj strategię Parity
     for (let y = 0; y < size; y++) {
         for (let x = 0; x < size; x++) {
+            // Strzelaj w pola, które pasują do "szachownicy" najmniejszego statku
             if ((x + y) % smallestShipSize !== 0) {
-                probMap[y][x] = 0; // Zeruj wagę pól, które nie pasują do siatki najmniejszego statku
+                finalProbMap[y][x] = 0;
             }
         }
     }
 
-    return probMap;
+    return finalProbMap;
 }
 
 /**
@@ -206,11 +222,46 @@ function canPlaceShipForProbability(grid, x, y, size, isVertical) {
     for (let i = 0; i < size; i++) {
         const currentX = isVertical ? x : x + i;
         const currentY = isVertical ? y + i : y;
-        if (grid[currentY][currentX] === 'miss' || grid[currentY][currentX] === 'sunk') {
-            return false; // Nie można umieścić statku na pudle lub zatopionym statku
+        if (currentX >= grid.length || currentY >= grid.length || grid[currentY][currentX] === 'miss' || grid[currentY][currentX] === 'sunk') {
+            return false; // Nie można umieścić statku na pudle, zatopionym statku lub poza planszą
         }
     }
     return true;
+}
+
+
+/**
+ * Oblicza entropię dla hipotetycznej przyszłej siatki.
+ */
+function calculateEntropyForFutureGrid(shotX, shotY, result) {
+    const size = currentConfig.size;
+    // Klonowanie głębokie, aby nie modyfikować oryginalnej siatki
+    const futureGrid = JSON.parse(JSON.stringify(opponentGrid));
+    futureGrid[shotY][shotX] = result;
+
+    // Oblicz przyszłą mapę prawdopodobieństwa
+    const futureProbMap = calculateProbabilityMap(futureGrid);
+
+    let totalProbability = 0;
+    for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+            totalProbability += futureProbMap[y][x];
+        }
+    }
+
+    if (totalProbability === 0) return 0;
+
+    let entropy = 0;
+    for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+            if (futureProbMap[y][x] > 0) {
+                const p = futureProbMap[y][x] / totalProbability;
+                entropy -= p * Math.log2(p);
+            }
+        }
+    }
+
+    return entropy;
 }
 
 
@@ -389,32 +440,70 @@ let currentTargetHits = []; // Przechowuje trafienia w aktualnie atakowany state
 /**
  * Główna funkcja tury bota - decyduje gdzie strzelić.
  */
+let isFirstShot = true;
+
 function botTurn() {
     const size = currentConfig.size;
     let x, y;
 
-    if (botState === 'HUNT') {
-        // Tryb HUNT: Użyj mapy prawdopodobieństwa
-        const probMap = calculateProbabilityMap();
-        let maxProb = -1;
+    if (isFirstShot) {
+        const center = Math.floor(size / 2);
+        const options = [
+            {x: center, y: center},
+            {x: center - 1, y: center},
+            {x: center, y: center - 1},
+            {x: center - 1, y: center - 1},
+        ];
+        const choice = options[Math.floor(Math.random() * options.length)];
+        x = choice.x;
+        y = choice.y;
+        isFirstShot = false;
+    } else if (botState === 'HUNT') {
+        // Nowa, zaawansowana logika z analizą entropii
+        const startTime = performance.now();
+        const probMap = calculateProbabilityMap(opponentGrid);
         let bestShots = [];
+        let maxProb = -1;
 
+        // Znajdź kandydatów do strzału
         for (let r = 0; r < size; r++) {
             for (let c = 0; c < size; c++) {
-                if (opponentGrid[r][c] === 'unknown') {
-                    if (probMap[r][c] > maxProb) {
-                        maxProb = probMap[r][c];
-                        bestShots = [{ x: c, y: r }];
-                    } else if (probMap[r][c] === maxProb) {
-                        bestShots.push({ x: c, y: r });
-                    }
+                if (probMap[r][c] > maxProb) {
+                    maxProb = probMap[r][c];
+                    bestShots = [{ x: c, y: r }];
+                } else if (probMap[r][c] === maxProb) {
+                    bestShots.push({ x: c, y: r });
                 }
             }
         }
 
-        const randomBestShot = bestShots[Math.floor(Math.random() * bestShots.length)];
-        x = randomBestShot.x;
-        y = randomBestShot.y;
+        let bestShot = bestShots[Math.floor(Math.random() * bestShots.length)];
+        let minEntropy = Infinity;
+
+        // Analiza entropii dla najlepszych kandydatów
+        for (const shot of bestShots) {
+            if (performance.now() - startTime > 4800) { // Limit 4.8s
+                console.log("Przekroczono czas analizy entropii, wybieram najlepszy dotychczasowy strzał.");
+                break;
+            }
+
+            // Symulacja trafienia
+            const futureEntropyHit = calculateEntropyForFutureGrid(shot.x, shot.y, 'hit');
+            // Symulacja pudła
+            const futureEntropyMiss = calculateEntropyForFutureGrid(shot.x, shot.y, 'miss');
+
+            const p_hit = probMap[shot.y][shot.x] / (size*size); // Uproszczone prawdopodobieństwo
+            const p_miss = 1 - p_hit;
+            const expectedEntropy = p_hit * futureEntropyHit + p_miss * futureEntropyMiss;
+
+            if (expectedEntropy < minEntropy) {
+                minEntropy = expectedEntropy;
+                bestShot = shot;
+            }
+        }
+
+        x = bestShot.x;
+        y = bestShot.y;
 
     } else { // botState === 'TARGET'
         generateTargetQueue();
@@ -470,10 +559,17 @@ function updateAfterBotShot(result) {
             targetQueue = [];
 
             // Zanim wyczyścimy, zidentyfikujmy statek
-            identifySunkShip(x, y);
+            const identificationSuccess = identifySunkShip(x, y);
             currentTargetHits = [];
 
-            checkWinCondition();
+            if (identificationSuccess) {
+                 checkWinCondition();
+            } else {
+                // Jeśli identyfikacja się nie powiodła, nie kończymy tury bota,
+                // aby gracz mógł poprawić swój błąd.
+                botState = 'TARGET'; // Pozostań w trybie TARGET
+                return; // Zatrzymaj dalsze wykonywanie
+            }
             break;
     }
     renderBoard('opponent-board', opponentGrid); // Odśwież widok planszy
@@ -549,29 +645,34 @@ function identifySunkShip(x, y) {
     const size = currentConfig.size;
     const q = [{x, y}];
     const visited = new Set([`${x},${y}`]);
-    const shipParts = [];
+    const shipParts = [{x, y}]; // Ostatni strzał to też część statku
 
+    // Zbierz wszystkie połączone 'hit'
     while (q.length > 0) {
         const current = q.shift();
-        shipParts.push(current);
-
         const neighbors = [{x:current.x+1, y:current.y}, {x:current.x-1, y:current.y}, {x:current.x, y:current.y+1}, {x:current.x, y:current.y-1}];
         for (const n of neighbors) {
             const key = `${n.x},${n.y}`;
             if (n.x >= 0 && n.x < size && n.y >= 0 && n.y < size && !visited.has(key) && opponentGrid[n.y][n.x] === 'hit') {
                 visited.add(key);
                 q.push(n);
+                shipParts.push(n);
             }
         }
     }
 
     const sunkShipSize = shipParts.length;
     const shipIndex = opponentShips.findIndex(s => s.size === sunkShipSize && s.count > 0);
+
     if (shipIndex !== -1) {
         opponentShips[shipIndex].count--;
         console.log(`Bot automatycznie zidentyfikował i usunął statek o rozmiarze ${sunkShipSize}.`);
+        return true;
     } else {
-        console.warn(`Nie znaleziono pasującego statku o rozmiarze ${sunkShipSize} do usunięcia.`);
+        alert(`Błąd: Zgłoszono zatopienie, ale nie ma już dostępnych statków o rozmiarze ${sunkShipSize}! Sprawdź planszę przeciwnika.`);
+        // Przywróćmy stan 'hit', aby umożliwić kontynuację lub korektę
+        shipParts.forEach(part => opponentGrid[part.y][part.x] = 'hit');
+        return false;
     }
 }
 
@@ -652,9 +753,11 @@ document.addEventListener('DOMContentLoaded', () => {
         location.reload();
     });
 
-    document.getElementById('submit-shot-btn').addEventListener('click', () => {
-        const input = document.getElementById('shot-input');
-        const value = input.value.trim().toUpperCase();
+    const shotInput = document.getElementById('shot-input');
+    const submitShotBtn = document.getElementById('submit-shot-btn');
+
+    const handleSubmitShot = () => {
+        const value = shotInput.value.trim().toUpperCase();
         if (!value) return;
 
         const letter = value.charAt(0);
@@ -666,10 +769,17 @@ document.addEventListener('DOMContentLoaded', () => {
             const cell = document.querySelector(`#player-board .cell[data-x='${x}'][data-y='${y}']`);
             if (cell) {
                 cell.click();
-                input.value = ''; // Wyczyść pole po strzale
+                shotInput.value = ''; // Wyczyść pole po strzale
             }
         } else {
             alert("Nieprawidłowe koordynaty. Wpisz np. 'A5'.");
+        }
+    };
+
+    submitShotBtn.addEventListener('click', handleSubmitShot);
+    shotInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+            handleSubmitShot();
         }
     });
 });
