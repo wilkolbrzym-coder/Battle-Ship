@@ -65,8 +65,6 @@ main {
     display: flex;
     color: var(--md-sys-color-on-surface-variant);
     font-size: calc(var(--cell-size) * 0.5);
-    justify-content: center;
-    align-items: center;
 }
 
 .coords-top {
@@ -101,41 +99,59 @@ main {
     border: 1px solid var(--md-sys-color-outline);
     box-sizing: border-box;
     cursor: pointer;
-    transition: background-color 0.3s;
+    transition: background-color 0.2s ease-in-out, transform 0.2s ease-in-out;
     display: flex;
     justify-content: center;
     align-items: center;
-    font-size: calc(var(--cell-size) * 0.8);
+    font-size: calc(var(--cell-size) * 0.7);
+    border-radius: 4px;
+    background-color: rgba(255, 255, 255, 0.05);
 }
 
 .cell:hover {
-    background-color: var(--md-sys-color-surface-variant);
+    background-color: rgba(255, 255, 255, 0.1);
+    transform: scale(1.05);
 }
 
 /* Stany komórek */
 .cell.miss::after {
     font-family: 'Material Symbols Outlined';
-    content: 'close';
-    color: var(--md-sys-color-on-surface);
-    font-weight: 300;
+    content: 'water_drop';
+    color: var(--md-sys-color-on-surface-variant);
+    font-variation-settings: 'FILL' 0, 'wght' 200, 'GRAD' 0, 'opsz' 24;
+    opacity: 0.6;
+}
+
+.cell.hit {
+    background: radial-gradient(circle, rgba(255,180,50,0.6) 0%, transparent 70%);
 }
 
 .cell.hit::after {
     font-family: 'Material Symbols Outlined';
-    content: 'explosion'; /* Placeholder, można zmienić na inną ikonę */
-    color: var(--md-sys-color-primary);
+    content: 'local_fire_department';
+    color: #FFB4AB; /* Kolor z palety Material Design Error */
+    font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
 }
 
-.cell.damaged {
-    background-color: orange;
+.cell.damaged { /* Teraz będzie to samo co hit */
+    background: radial-gradient(circle, rgba(255,180,50,0.6) 0%, transparent 70%);
 }
 
 .cell.sunk {
-    background-color: red;
+    background-color: #4C0004; /* Ciemny czerwony */
+    border-color: #FFB4AB;
+}
+
+.cell.sunk::after {
+    font-family: 'Material Symbols Outlined';
+    content: 'skull';
+    color: #FFB4AB;
+    font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
 }
 
 .cell.ship {
     background-color: var(--md-sys-color-primary-container);
+    opacity: 0.7;
 }
 
 

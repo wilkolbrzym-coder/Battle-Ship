@@ -55,6 +55,8 @@ function createBoard(boardId, topCoordsId, leftCoordsId, size) {
     // Generowanie górnych koordynatów (cyfry)
     for (let i = 0; i < size; i++) {
         const coord = document.createElement('div');
+        coord.style.width = 'var(--cell-size)';
+        coord.style.textAlign = 'center';
         coord.textContent = i + 1;
         topCoordsElement.appendChild(coord);
     }
@@ -62,6 +64,10 @@ function createBoard(boardId, topCoordsId, leftCoordsId, size) {
     // Generowanie lewych koordynatów (litery)
     for (let i = 0; i < size; i++) {
         const coord = document.createElement('div');
+        coord.style.height = 'var(--cell-size)';
+        coord.style.display = 'flex';
+        coord.style.alignItems = 'center';
+        coord.style.justifyContent = 'center';
         coord.textContent = String.fromCharCode(65 + i);
         leftCoordsElement.appendChild(coord);
     }
@@ -462,10 +468,12 @@ function updateAfterBotShot(result) {
             // Reset stanu bota
             botState = 'HUNT';
             targetQueue = [];
+
+            // Zanim wyczyścimy, zidentyfikujmy statek
+            identifySunkShip(x, y);
             currentTargetHits = [];
 
-            // Pokaż modal do wyboru zatopionego statku
-            showSunkShipModal();
+            checkWinCondition();
             break;
     }
     renderBoard('opponent-board', opponentGrid); // Odśwież widok planszy
@@ -532,28 +540,39 @@ function markSurroundingAsMiss(shipPositions) {
 // Etap 5: Finalizacja
 // Kod do obsługi ekranów startowych/końcowych i ustawień gry.
 
-function showSunkShipModal() {
-    const modal = document.getElementById('sunk-ship-modal');
-    const optionsContainer = document.getElementById('sunk-ship-options');
-    optionsContainer.innerHTML = ''; // Wyczyść stare opcje
+/**
+ * Automatycznie identyfikuje zatopiony statek na podstawie ostatniego trafienia.
+ * @param {number} x - Współrzędna X ostatniego trafienia.
+ * @param {number} y - Współrzędna Y ostatniego trafienia.
+ */
+function identifySunkShip(x, y) {
+    const size = currentConfig.size;
+    const q = [{x, y}];
+    const visited = new Set([`${x},${y}`]);
+    const shipParts = [];
 
-    const availableShips = opponentShips.filter(s => s.count > 0);
-    for (const ship of availableShips) {
-        const button = document.createElement('button');
-        button.classList.add('board-size-btn');
-        button.textContent = `${ship.name} (${ship.size})`;
-        button.dataset.size = ship.size;
-        button.addEventListener('click', () => {
-            const shipIndex = opponentShips.findIndex(s => s.size === ship.size);
-            opponentShips[shipIndex].count--;
-            console.log(`Usunięto statek o rozmiarze ${ship.size}. Pozostało:`, opponentShips);
-            modal.classList.add('hidden');
-            checkWinCondition();
-        });
-        optionsContainer.appendChild(button);
+    while (q.length > 0) {
+        const current = q.shift();
+        shipParts.push(current);
+
+        const neighbors = [{x:current.x+1, y:current.y}, {x:current.x-1, y:current.y}, {x:current.x, y:current.y+1}, {x:current.x, y:current.y-1}];
+        for (const n of neighbors) {
+            const key = `${n.x},${n.y}`;
+            if (n.x >= 0 && n.x < size && n.y >= 0 && n.y < size && !visited.has(key) && opponentGrid[n.y][n.x] === 'hit') {
+                visited.add(key);
+                q.push(n);
+            }
+        }
     }
 
-    modal.classList.remove('hidden');
+    const sunkShipSize = shipParts.length;
+    const shipIndex = opponentShips.findIndex(s => s.size === sunkShipSize && s.count > 0);
+    if (shipIndex !== -1) {
+        opponentShips[shipIndex].count--;
+        console.log(`Bot automatycznie zidentyfikował i usunął statek o rozmiarze ${sunkShipSize}.`);
+    } else {
+        console.warn(`Nie znaleziono pasującego statku o rozmiarze ${sunkShipSize} do usunięcia.`);
+    }
 }
 
 function checkWinCondition() {
