@@ -94,8 +94,6 @@ function handlePlayerBoardClick(event) {
 
     const x = parseInt(cell.dataset.x);
     const y = parseInt(cell.dataset.y);
-    const coordString = `${String.fromCharCode(65 + y)}${x + 1}`;
-    logEvent(`P2 strzela w ${coordString}.`);
 
     const cellState = playerGrid[y][x];
 
@@ -165,15 +163,6 @@ function handleOpponentBoardClick(event) {
 // ##################################################################
 
 let turnCounter = 1;
-
-function logEvent(message) {
-    const gameLog = document.getElementById('game-log');
-    const entry = document.createElement('div');
-    entry.classList.add('log-entry');
-    entry.textContent = message;
-    gameLog.appendChild(entry);
-    gameLog.scrollTop = gameLog.scrollHeight;
-}
 
 
 // ##################################################################
@@ -340,7 +329,7 @@ class MCTSNode {
     }
 }
 
-function runMCTS(currentState, timeout = 4800) {
+function runMCTS(currentState, timeout = 20000) {
     const root = new MCTSNode(currentState);
     const startTime = performance.now();
 
@@ -1031,7 +1020,7 @@ function botTurn() {
             const isParanoid = remainingShipsTotal <= 2 && smallestShipLeft <= 2;
 
             let timeout = 1000 + (remainingShipsTotal * 250);
-            if (timeout > 4800) timeout = 4800;
+            if (timeout > 20000) timeout = 20000;
             console.log(`AI: Dynamiczny czas analizy: ${timeout}ms. Tryb 'Kontr-Strategii': ${isParanoid}`);
 
             const currentState = new GameState(opponentGrid, opponentShips, isParanoid);
@@ -1058,7 +1047,6 @@ function botTurn() {
     // Aktualizacja UI z sugestią
     const coordString = `${String.fromCharCode(65 + y)}${x + 1}`;
     document.getElementById('bot-suggestion').textContent = coordString;
-    logEvent(`BOT sugeruje strzał w ${coordString}.`);
     console.log(`Bot sugeruje strzał w: (${x}, ${y})`);
 }
 
@@ -1320,7 +1308,6 @@ function startGame(sizeConfig) {
 
     for (const [id, action] of Object.entries(buttons)) {
         document.getElementById(id).addEventListener('click', () => {
-            logEvent(`Wynik strzału: ${action}.`);
             updateAfterBotShot(action);
             if(botState === 'HUNT') turnCounter++;
             botTurn();
