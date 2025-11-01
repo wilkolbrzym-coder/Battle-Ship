@@ -24,10 +24,10 @@ const GAME_CONFIGS = {
     '15x15': {
         size: 15,
         ships: [
-            { name: 'pięciomasztowiec', size: 5, count: 2 },
-            { name: 'czteromasztowiec', size: 4, count: 2 },
-            { name: 'trójmasztowiec', size: 3, count: 4 },
-            { name: 'dwumasztowiec', size: 2, count: 3 }
+            { name: 'pięciomasztowiec', size: 5, count: 3 },
+            { name: 'czteromasztowiec', size: 4, count: 3 },
+            { name: 'trójmasztowiec', size: 3, count: 5 },
+            { name: 'dwumasztowiec', size: 2, count: 4 }
         ]
     }
 };
@@ -35,17 +35,38 @@ const GAME_CONFIGS = {
 let currentConfig = GAME_CONFIGS['10x10'];
 
 /**
- * Tworzy planszę do gry o określonym rozmiarze.
+ * Tworzy planszę do gry o określonym rozmiarze wraz z koordynatami.
  * @param {string} boardId - ID elementu HTML, w którym ma być plansza.
- * @param {number} size - Rozmiar planszy (np. 10 dla 10x10).
+ * @param {string} topCoordsId - ID kontenera na górne koordynaty.
+ * @param {string} leftCoordsId - ID kontenera na lewe koordynaty.
+ * @param {number} size - Rozmiar planszy.
  */
-function createBoard(boardId, size) {
+function createBoard(boardId, topCoordsId, leftCoordsId, size) {
     const boardElement = document.getElementById(boardId);
-    boardElement.innerHTML = ''; // Wyczyść planszę przed generowaniem
+    const topCoordsElement = document.getElementById(topCoordsId);
+    const leftCoordsElement = document.getElementById(leftCoordsId);
 
-    // Ustawienie właściwości CSS dla siatki
+    boardElement.innerHTML = '';
+    topCoordsElement.innerHTML = '';
+    leftCoordsElement.innerHTML = '';
+
     boardElement.style.setProperty('--grid-size', size);
 
+    // Generowanie górnych koordynatów (cyfry)
+    for (let i = 0; i < size; i++) {
+        const coord = document.createElement('div');
+        coord.textContent = i + 1;
+        topCoordsElement.appendChild(coord);
+    }
+
+    // Generowanie lewych koordynatów (litery)
+    for (let i = 0; i < size; i++) {
+        const coord = document.createElement('div');
+        coord.textContent = String.fromCharCode(65 + i);
+        leftCoordsElement.appendChild(coord);
+    }
+
+    // Generowanie siatki gry
     for (let i = 0; i < size * size; i++) {
         const cell = document.createElement('div');
         cell.classList.add('cell');
@@ -135,23 +156,35 @@ function handleOpponentBoardClick(event) {
 function calculateProbabilityMap() {
     const size = currentConfig.size;
     const probMap = Array(size).fill(null).map(() => Array(size).fill(0));
-    const shipsToPlace = opponentShips.flatMap(ship => Array(ship.count).fill(ship.size));
 
-    for (const shipSize of shipsToPlace) {
+    // Użyj tylko statków, które jeszcze nie zostały zatopione
+    const shipsToPlace = opponentShips.filter(s => s.count > 0).flatMap(ship => Array(ship.count).fill(ship));
+
+    if (shipsToPlace.length === 0) return probMap; // Zwróć pustą mapę, jeśli nie ma już statków
+
+    const smallestShipSize = Math.min(...shipsToPlace.map(s => s.size));
+
+    for (const ship of shipsToPlace) {
+        const shipSize = ship.size;
         for (let y = 0; y < size; y++) {
             for (let x = 0; x < size; x++) {
                 // Sprawdź w poziomie
                 if (x + shipSize <= size && canPlaceShipForProbability(opponentGrid, x, y, shipSize, false)) {
-                    for (let i = 0; i < shipSize; i++) {
-                        probMap[y][x + i]++;
-                    }
+                    for (let i = 0; i < shipSize; i++) probMap[y][x + i]++;
                 }
                 // Sprawdź w pionie
                 if (y + shipSize <= size && canPlaceShipForProbability(opponentGrid, x, y, shipSize, true)) {
-                    for (let i = 0; i < shipSize; i++) {
-                        probMap[y + i][x]++;
-                    }
+                    for (let i = 0; i < shipSize; i++) probMap[y + i][x]++;
                 }
+            }
+        }
+    }
+
+    // Zastosowanie strategii Parity - zwiększ wagę pól "szachownicy"
+    for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+            if ((x + y) % smallestShipSize !== 0) {
+                probMap[y][x] = 0; // Zeruj wagę pól, które nie pasują do siatki najmniejszego statku
             }
         }
     }
@@ -197,7 +230,22 @@ function initializeGrids(size) {
 }
 
 /**
- * Rozmieszcza statki losowo na podanej siatce.
+ * Tworzy mapę wag, preferującą centrum planszy.
+ */
+function createWeightMap(size) {
+    const weightMap = Array(size).fill(null).map(() => Array(size).fill(0));
+    const center = Math.floor(size / 2);
+    for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+            const dist = Math.min(Math.abs(x - center), Math.abs(y - center));
+            weightMap[y][x] = size - dist;
+        }
+    }
+    return weightMap;
+}
+
+/**
+ * Rozmieszcza statki strategicznie, używając mapy wag.
  * @param {Array<Array<string>>} grid - Siatka do umieszczenia statków.
  * @param {Array<object>} shipsConfig - Konfiguracja statków do rozmieszczenia.
  */
@@ -205,36 +253,67 @@ function placeShipsRandomly(grid, shipsConfig) {
     const size = grid.length;
     let shipIdCounter = 0;
     playerShips = []; // Resetuj listę statków gracza
+    const weightMap = createWeightMap(size);
 
-    for (const shipType of shipsConfig) {
-        for (let i = 0; i < shipType.count; i++) {
-            let placed = false;
-            while (!placed) {
-                const isVertical = Math.random() < 0.5;
-                const x = Math.floor(Math.random() * (isVertical ? size : size - shipType.size + 1));
-                const y = Math.floor(Math.random() * (isVertical ? size - shipType.size + 1 : size));
+    // Preferencja, aby unikać symetrii
+    const preferTop = Math.random() < 0.5;
 
-                if (canPlaceShip(grid, x, y, shipType.size, isVertical)) {
-                    const newShip = {
-                        id: shipIdCounter++,
-                        name: shipType.name,
-                        size: shipType.size,
-                        positions: [],
-                        hits: 0,
-                        isSunk: false
-                    };
+    // Sortuj statki od największego do najmniejszego
+    const sortedShips = shipsConfig.flatMap(s => Array(s.count).fill(s)).sort((a, b) => b.size - a.size);
 
-                    for (let j = 0; j < shipType.size; j++) {
-                        const currentX = isVertical ? x : x + j;
-                        const currentY = isVertical ? y + j : y;
+    for (const shipType of sortedShips) {
+        let placed = false;
+        let attempts = 0;
+        while (!placed && attempts < 200) { // Ogranicznik prób, by uniknąć pętli nieskończonej
+            attempts++;
+            const isVertical = Math.random() < 0.5;
 
-                        grid[currentY][currentX] = { shipId: newShip.id, hit: false };
-                        newShip.positions.push({ x: currentX, y: currentY });
+            // Losuj pozycję z uwzględnieniem wag
+            const weightedPositions = [];
+            for (let y = 0; y < size; y++) {
+                for (let x = 0; x < size; x++) {
+                    if ((preferTop && y < size / 2) || (!preferTop && y > size / 2)) {
+                         weightedPositions.push({x, y, weight: weightMap[y][x] * 2}); // Podwójna waga dla preferowanej połowy
+                    } else {
+                        weightedPositions.push({x, y, weight: weightMap[y][x]});
                     }
-                    playerShips.push(newShip);
-                    placed = true;
                 }
             }
+            const totalWeight = weightedPositions.reduce((acc, pos) => acc + pos.weight, 0);
+            let random = Math.random() * totalWeight;
+            let chosenPos = null;
+            for(const pos of weightedPositions) {
+                random -= pos.weight;
+                if(random <= 0) {
+                    chosenPos = pos;
+                    break;
+                }
+            }
+
+            if (!chosenPos || (isVertical ? chosenPos.y + shipType.size > size : chosenPos.x + shipType.size > size)) continue;
+
+            if (canPlaceShip(grid, chosenPos.x, chosenPos.y, shipType.size, isVertical)) {
+                const newShip = {
+                    id: shipIdCounter++,
+                    name: shipType.name,
+                    size: shipType.size,
+                    positions: [],
+                    hits: 0,
+                    isSunk: false
+                };
+                for (let j = 0; j < shipType.size; j++) {
+                    const currentX = isVertical ? chosenPos.x : chosenPos.x + j;
+                    const currentY = isVertical ? chosenPos.y + j : chosenPos.y;
+                    grid[currentY][currentX] = { shipId: newShip.id, hit: false };
+                    newShip.positions.push({ x: currentX, y: currentY });
+                }
+                playerShips.push(newShip);
+                placed = true;
+            }
+        }
+        if (!placed) {
+            console.error("Nie udało się umieścić statku:", shipType.name);
+             // Awaryjne umieszczanie, jeśli strategia zawiedzie
         }
     }
 }
@@ -299,6 +378,7 @@ function renderBoard(boardId, grid) {
 let botState = 'HUNT'; // Może być 'HUNT' lub 'TARGET'
 let targetQueue = []; // Kolejka celów do sprawdzenia w trybie TARGET
 let lastShot = null;
+let currentTargetHits = []; // Przechowuje trafienia w aktualnie atakowany statek
 
 /**
  * Główna funkcja tury bota - decyduje gdzie strzelić.
@@ -331,15 +411,15 @@ function botTurn() {
         y = randomBestShot.y;
 
     } else { // botState === 'TARGET'
-        // Tryb TARGET: weź następny cel z kolejki
+        generateTargetQueue();
         if (targetQueue.length > 0) {
             const nextTarget = targetQueue.shift();
             x = nextTarget.x;
             y = nextTarget.y;
         } else {
-             // Jeśli kolejka jest pusta, wracamy do polowania
+             // Jeśli kolejka jest pusta (co nie powinno się zdarzyć, ale na wszelki wypadek)
             botState = 'HUNT';
-            botTurn(); // Wywołaj ponownie, aby znaleźć nowy cel
+            botTurn();
             return;
         }
     }
@@ -366,27 +446,23 @@ function updateAfterBotShot(result) {
             cellElement.classList.add('miss');
             break;
         case 'Trafiony':
-            opponentGrid[y][x] = 'hit';
-            cellElement.classList.add('hit');
-            botState = 'TARGET';
-            // Jeśli już jesteśmy w trybie TARGET, próbujemy ustalić orientację statku
-            if (targetQueue.length > 0) {
-                refineTargetQueue(x, y);
-            } else {
-                addNeighborsToTargetQueue(x, y);
-            }
-            break;
         case 'Uszkodzony':
             opponentGrid[y][x] = 'hit';
-            cellElement.classList.add('damaged');
+            cellElement.classList.add(result === 'Trafiony' ? 'hit' : 'damaged');
             botState = 'TARGET';
-            addNeighborsToTargetQueue(x, y);
+            currentTargetHits.push({ x, y });
+            // Generowanie nowych celów zostanie obsłużone w botTurn
             break;
         case 'Zatopiony':
             opponentGrid[y][x] = 'sunk';
             cellElement.classList.add('sunk');
-            botState = 'HUNT'; // Wracamy do polowania
-            targetQueue = []; // Czyścimy kolejkę
+            currentTargetHits.push({ x, y });
+            markSurroundingAsMiss(currentTargetHits);
+
+            // Reset stanu bota
+            botState = 'HUNT';
+            targetQueue = [];
+            currentTargetHits = [];
 
             // Pokaż modal do wyboru zatopionego statku
             showSunkShipModal();
@@ -395,65 +471,58 @@ function updateAfterBotShot(result) {
     renderBoard('opponent-board', opponentGrid); // Odśwież widok planszy
 }
 
-function addNeighborsToTargetQueue(x, y) {
+/**
+ * Generuje kolejkę celów w trybie TARGET.
+ */
+function generateTargetQueue() {
+    targetQueue = [];
     const size = currentConfig.size;
-    const neighbors = [
-        { x: x, y: y - 1 }, { x: x, y: y + 1 },
-        { x: x - 1, y: y }, { x: x + 1, y: y }
-    ];
 
-    for (const n of neighbors) {
-        if (n.x >= 0 && n.x < size && n.y >= 0 && n.y < size && opponentGrid[n.y][n.x] === 'unknown') {
-            if (!targetQueue.some(t => t.x === n.x && t.y === n.y)) {
-                 targetQueue.push(n);
-            }
+    const isValidTarget = (x, y) => {
+        return x >= 0 && x < size && y >= 0 && y < size && opponentGrid[y][x] === 'unknown';
+    };
+
+    if (currentTargetHits.length === 1) {
+        const { x, y } = currentTargetHits[0];
+        // Dodaj 4 sąsiadów
+        [{x:x, y:y-1}, {x:x, y:y+1}, {x:x-1, y:y}, {x:x+1, y:y}].forEach(t => {
+            if(isValidTarget(t.x, t.y)) targetQueue.push(t);
+        });
+    } else {
+        // Ustal orientację i dodaj cele na końcach
+        currentTargetHits.sort((a, b) => a.x - b.x || a.y - b.y);
+        const firstHit = currentTargetHits[0];
+        const lastHit = currentTargetHits[currentTargetHits.length - 1];
+        const isVertical = firstHit.x === lastHit.x;
+
+        if (isVertical) {
+            if (isValidTarget(firstHit.x, firstHit.y - 1)) targetQueue.push({ x: firstHit.x, y: firstHit.y - 1 });
+            if (isValidTarget(lastHit.x, lastHit.y + 1)) targetQueue.push({ x: lastHit.x, y: lastHit.y + 1 });
+        } else { // Poziomo
+            if (isValidTarget(firstHit.x - 1, firstHit.y)) targetQueue.push({ x: firstHit.x - 1, y: firstHit.y });
+            if (isValidTarget(lastHit.x + 1, lastHit.y)) targetQueue.push({ x: lastHit.x + 1, y: lastHit.y });
         }
     }
 }
 
 /**
- * Po drugim trafieniu, ta funkcja ustala orientację statku i zawęża kolejkę celów.
+ * Po zatopieniu statku, oznacza otaczające go pola jako 'miss'.
+ * @param {Array<{x: number, y: number}>} shipPositions - Pozycje zatopionego statku.
  */
-function refineTargetQueue(x, y) {
-    const hits = [];
-    for (let r = 0; r < currentConfig.size; r++) {
-        for (let c = 0; c < currentConfig.size; c++) {
-            if (opponentGrid[r][c] === 'hit') {
-                hits.push({x: c, y: r});
+function markSurroundingAsMiss(shipPositions) {
+    const size = currentConfig.size;
+    shipPositions.forEach(pos => {
+        for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+                if (dx === 0 && dy === 0) continue;
+                const newX = pos.x + dx;
+                const newY = pos.y + dy;
+                if (newX >= 0 && newX < size && newY >= 0 && newY < size && opponentGrid[newY][newX] === 'unknown') {
+                    opponentGrid[newY][newX] = 'miss';
+                }
             }
         }
-    }
-
-    if (hits.length < 2) return; // Potrzebujemy co najmniej dwóch trafień
-
-    const lastHit = {x, y};
-    const prevHit = hits.find(h => h.x !== lastHit.x || h.y !== lastHit.y);
-
-    const isVertical = lastHit.x === prevHit.x;
-    const isHorizontal = lastHit.y === prevHit.y;
-
-    if (isVertical) {
-        targetQueue = targetQueue.filter(t => t.x === x);
-        targetQueue.push({x: x, y: y-1}, {x: x, y: y+1});
-    } else if (isHorizontal) {
-        targetQueue = targetQueue.filter(t => t.y === y);
-        targetQueue.push({x: x-1, y: y}, {x: x+1, y: y});
-    }
-
-     // Usuń duplikaty i już ostrzelane pola
-    const uniqueTargets = [];
-    const seen = new Set();
-    for (const target of targetQueue) {
-        const key = `${target.x},${target.y}`;
-        if (!seen.has(key) &&
-            target.x >= 0 && target.x < currentConfig.size &&
-            target.y >= 0 && target.y < currentConfig.size &&
-            opponentGrid[target.y][target.x] === 'unknown') {
-            uniqueTargets.push(target);
-            seen.add(key);
-        }
-    }
-    targetQueue = uniqueTargets;
+    });
 }
 
 
@@ -512,10 +581,11 @@ function startGame(sizeConfig) {
     console.log(`Rozpoczynanie gry z planszą ${sizeConfig}...`);
     currentConfig = GAME_CONFIGS[sizeConfig];
     document.getElementById('start-screen').classList.add('hidden');
+    document.getElementById('shot-input-container').classList.remove('hidden');
 
     // Inicjalizacja i generowanie widoku
-    createBoard('player-board', currentConfig.size);
-    createBoard('opponent-board', currentConfig.size);
+    createBoard('player-board', 'player-coords-top', 'player-coords-left', currentConfig.size);
+    createBoard('opponent-board', 'opponent-coords-top', 'opponent-coords-left', currentConfig.size);
 
     // Inicjalizacja logicznej reprezentacji plansz
     initializeGrids(currentConfig.size);
@@ -561,5 +631,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.getElementById('restart-btn').addEventListener('click', () => {
         location.reload();
+    });
+
+    document.getElementById('submit-shot-btn').addEventListener('click', () => {
+        const input = document.getElementById('shot-input');
+        const value = input.value.trim().toUpperCase();
+        if (!value) return;
+
+        const letter = value.charAt(0);
+        const number = parseInt(value.substring(1), 10);
+
+        if (letter >= 'A' && letter <= String.fromCharCode(65 + currentConfig.size - 1) && number >= 1 && number <= currentConfig.size) {
+            const y = letter.charCodeAt(0) - 65;
+            const x = number - 1;
+            const cell = document.querySelector(`#player-board .cell[data-x='${x}'][data-y='${y}']`);
+            if (cell) {
+                cell.click();
+                input.value = ''; // Wyczyść pole po strzale
+            }
+        } else {
+            alert("Nieprawidłowe koordynaty. Wpisz np. 'A5'.");
+        }
     });
 });
