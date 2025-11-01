@@ -154,6 +154,31 @@ main {
     opacity: 0.7;
 }
 
+#opponent-board .cell {
+    position: relative;
+}
+
+#opponent-board .cell::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: #89CFF0; /* Kolor wizualizacji */
+    opacity: var(--prob-opacity, 0);
+    transition: opacity 0.3s ease;
+    z-index: 1;
+    border-radius: 4px;
+}
+
+#opponent-board .cell.hit::before,
+#opponent-board .cell.miss::before,
+#opponent-board .cell.sunk::before,
+#opponent-board .cell.damaged::before {
+    opacity: 0 !important; /* Użyj !important, aby nadpisać styl bazowy */
+}
+
 
 .controls-container {
     display: flex;
@@ -196,6 +221,80 @@ main {
 .action-buttons button:hover {
     background-color: var(--md-sys-color-primary);
     color: var(--md-sys-color-on-primary);
+}
+
+/* ##################################################################
+   #                        ANIMACJE BITWY                          #
+   ################################################################## */
+
+@keyframes hit-animation {
+    0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255, 180, 50, 0.7); }
+    50% { transform: scale(1.2); box-shadow: 0 0 15px 10px rgba(255, 180, 50, 0); }
+    100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255, 180, 50, 0); }
+}
+
+@keyframes miss-animation {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-5px); }
+    75% { transform: translateX(5px); }
+}
+
+@keyframes sunk-animation {
+    0% { filter: brightness(1); }
+    50% { filter: brightness(2) saturate(2); transform: rotate(5deg) scale(1.1); }
+    100% { filter: brightness(1); }
+}
+
+.cell.animate-hit {
+    animation: hit-animation 0.5s ease-out;
+}
+
+.cell.animate-miss {
+    animation: miss-animation 0.4s ease-in-out;
+}
+
+.cell.animate-sunk {
+    animation: sunk-animation 0.6s ease;
+}
+
+#game-log-container {
+    width: 100%;
+    margin-top: 1rem;
+}
+
+#game-log {
+    background-color: rgba(0,0,0,0.2);
+    border: 1px solid var(--md-sys-color-outline);
+    border-radius: 12px;
+    height: 150px;
+    overflow-y: auto;
+    padding: 0.5rem;
+    text-align: left;
+    font-size: 0.9rem;
+}
+
+.log-entry {
+    margin-bottom: 0.25rem;
+}
+
+.icon-btn {
+    background: none;
+    border: none;
+    color: var(--md-sys-color-on-surface-variant);
+    cursor: pointer;
+    padding: 0.5rem;
+    border-radius: 50%;
+}
+.icon-btn:hover {
+    background-color: rgba(255,255,255,0.1);
+}
+
+.setting-option {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+    margin: 1rem 0;
 }
 
 /* Ekran startowy i modale */
