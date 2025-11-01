@@ -94,6 +94,9 @@ function handlePlayerBoardClick(event) {
 
     const x = parseInt(cell.dataset.x);
     const y = parseInt(cell.dataset.y);
+    const coordString = `${String.fromCharCode(65 + y)}${x + 1}`;
+    logEvent(`P2 strzela w ${coordString}.`);
+
     const cellState = playerGrid[y][x];
 
     // Sprawdzenie, czy pole było już ostrzelane
@@ -105,32 +108,31 @@ function handlePlayerBoardClick(event) {
     if (typeof cellState === 'object' && cellState !== null && !cellState.hit) {
         // Trafienie w statek
         cellState.hit = true;
+        triggerAnimation(cell, 'animate-hit', 500);
         const ship = playerShips.find(s => s.id === cellState.shipId);
         ship.hits++;
 
-        // Sprawdzenie specjalnej zasady dla statku 3-masztowego
         let sunkBySpecialRule = false;
-        if (ship.size === 3) {
-            const middlePosition = ship.positions[1]; // Środkowy segment
-            if (middlePosition.x === x && middlePosition.y === y) {
-                ship.isSunk = true;
-                sunkBySpecialRule = true;
-                console.log("Statek 3-masztowy zatopiony specjalną zasadą!");
-            }
+        if (ship.size === 3 && ship.positions[1].x === x && ship.positions[1].y === y) {
+            ship.isSunk = true;
+            sunkBySpecialRule = true;
         }
 
-        // Standardowe sprawdzenie zatopienia
         if (!sunkBySpecialRule && ship.hits === ship.size) {
             ship.isSunk = true;
         }
 
         if (ship.isSunk) {
-            console.log(`Statek ${ship.name} został zatopiony!`);
-            // Oznacz wszystkie części statku jako zatopione, aby zmienić ich wygląd
-            ship.positions.forEach(pos => {
-                const sunkCell = document.querySelector(`#player-board .cell[data-x='${pos.x}'][data-y='${pos.y}']`);
-                sunkCell.classList.add('sunk');
-            });
+            setTimeout(() => {
+                ship.positions.forEach(pos => {
+                    const sunkCell = document.querySelector(`#player-board .cell[data-x='${pos.x}'][data-y='${pos.y}']`);
+                    if(sunkCell) {
+                        sunkCell.classList.remove('hit');
+                        sunkCell.classList.add('sunk');
+                        triggerAnimation(sunkCell, 'animate-sunk', 600);
+                    }
+                });
+            }, 550);
         }
 
         cell.classList.add('hit');
@@ -138,6 +140,7 @@ function handlePlayerBoardClick(event) {
     } else if (cellState === 'water') {
         // Pudło
         playerGrid[y][x] = 'miss';
+        triggerAnimation(cell, 'animate-miss', 400);
         cell.classList.add('miss');
     }
 }
@@ -154,6 +157,225 @@ function handleOpponentBoardClick(event) {
         console.log(`Bot strzela w pole: (${x}, ${y})`);
         // W przyszłości stan komórki będzie zależał od odpowiedzi gracza
     }
+}
+
+
+// ##################################################################
+// #                       NOWY INTERFEJS                           #
+// ##################################################################
+
+let turnCounter = 1;
+
+function logEvent(message) {
+    const gameLog = document.getElementById('game-log');
+    const entry = document.createElement('div');
+    entry.classList.add('log-entry');
+    entry.textContent = message;
+    gameLog.appendChild(entry);
+    gameLog.scrollTop = gameLog.scrollHeight;
+}
+
+
+// ##################################################################
+// #           RDZEŃ AI - PRZESZUKIWANIE DRZEWA MONTE CARLO         #
+// ##################################################################
+
+class GameState {
+    constructor(grid, ships, paranoid = false) {
+        this.grid = grid;
+        this.ships = ships;
+        this.paranoid = paranoid;
+    }
+
+    getPossibleMoves() {
+        const probMap = calculateProbabilityMap(this.grid);
+        const moves = [];
+        for (let y = 0; y < this.grid.length; y++) {
+            for (let x = 0; x < this.grid.length; x++) {
+                if (this.grid[y][x] === 'unknown') {
+                    let weight = probMap[y][x];
+                    // Modyfikuj wagi na podstawie profilu przeciwnika
+                    if (opponentProfile.placementBias.edge > opponentProfile.placementBias.center && (x === 0 || x === this.grid.length - 1 || y === 0 || y === this.grid.length - 1)) {
+                        weight *= 1.2;
+                    }
+                    if (opponentProfile.placementBias.center > opponentProfile.placementBias.edge && (x > 0 && x < this.grid.length - 1 && y > 0 && y < this.grid.length - 1)) {
+                        weight *= 1.2;
+                    }
+
+                    // Sprawdzenie orientacji jest bardziej złożone, wymaga analizy sąsiadów.
+                    // Na razie pominięte dla uproszczenia, ale dane są zbierane.
+
+                    moves.push({ x, y, weight });
+                }
+            }
+        }
+        // W trybie paranoicznym odwróć wagi
+        if(this.paranoid) return moves.sort((a, b) => a.weight - b.weight);
+        return moves.sort((a, b) => b.weight - a.weight);
+    }
+
+    applyMove(move) {
+        // Ta uproszczona wersja nie zna wyniku, więc zakładamy 'miss' dla symulacji
+        this.grid[move.y][move.x] = 'miss';
+    }
+
+    rollout() {
+        const tempGrid = JSON.parse(JSON.stringify(this.grid));
+        const remainingShipsList = this.ships.flatMap(s => Array(s.count).fill(s.size));
+        const totalShipCells = remainingShipsList.reduce((acc, size) => acc + size, 0);
+        const unknownCells = tempGrid.flat().filter(cell => cell === 'unknown').length;
+
+        if (totalShipCells > unknownCells) return -1; // Stan niemożliwy, niska ocena
+
+        let simulatedHits = 0;
+        const rolloutDepth = Math.max(10, Math.floor(unknownCells * 0.3)); // Symuluj 30% pozostałych pól
+
+        for (let i = 0; i < rolloutDepth; i++) {
+            const probMap = this.calculateRolloutProbability(tempGrid, remainingShipsList);
+            let bestMove = { x: -1, y: -1, weight: -1 };
+
+            for (let y = 0; y < tempGrid.length; y++) {
+                for (let x = 0; x < tempGrid.length; x++) {
+                    if (tempGrid[y][x] === 'unknown' && probMap[y][x] > bestMove.weight) {
+                        bestMove = { x, y, weight: probMap[y][x] };
+                    }
+                }
+            }
+
+            if (bestMove.x === -1) break; // Brak możliwych ruchów
+
+            // Symulacja wyniku strzału na podstawie prawdopodobieństwa
+            const hitProbability = totalShipCells / unknownCells;
+            if (Math.random() < hitProbability) {
+                simulatedHits++;
+                tempGrid[bestMove.y][bestMove.x] = 'hit'; // Oznacz jako trafiony dla dalszej symulacji
+            } else {
+                tempGrid[bestMove.y][bestMove.x] = 'miss';
+            }
+        }
+
+        // Znormalizuj wynik do zakresu [-1, 1]
+        const score = (simulatedHits / rolloutDepth) * 2 - 1;
+        return isNaN(score) ? 0 : score;
+    }
+
+    // Uproszczona i szybsza wersja mapy prawdopodobieństwa na potrzeby symulacji
+    calculateRolloutProbability(grid, ships) {
+        const size = grid.length;
+        const probMap = Array(size).fill(null).map(() => Array(size).fill(0));
+        if(ships.length === 0) return probMap;
+        const smallestShip = Math.min(...ships);
+
+        for (const shipSize of ships) {
+             for (let y = 0; y < size; y++) {
+                for (let x = 0; x < size; x++) {
+                    if (x + shipSize <= size && this.canPlaceForRollout(grid, x, y, shipSize, false)) {
+                        for (let k = 0; k < shipSize; k++) probMap[y][x + k]++;
+                    }
+                    if (y + shipSize <= size && this.canPlaceForRollout(grid, x, y, shipSize, true)) {
+                        for (let k = 0; k < shipSize; k++) probMap[y + k][x]++;
+                    }
+                }
+            }
+        }
+         // Prosta wersja Parity
+        for (let y = 0; y < size; y++) {
+            for (let x = 0; x < size; x++) {
+                if ((x + y) % smallestShip !== 0) probMap[y][x] *= 0.5;
+            }
+        }
+        return probMap;
+    }
+
+    canPlaceForRollout(grid, x, y, size, isVertical) {
+        for (let i = 0; i < size; i++) {
+            const currentX = isVertical ? x : x + i;
+            const currentY = isVertical ? y + i : y;
+             if (grid[currentY][currentX] === 'miss' || grid[currentY][currentX] === 'sunk') {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    clone() {
+        return new GameState(JSON.parse(JSON.stringify(this.grid)), JSON.parse(JSON.stringify(this.ships)));
+    }
+}
+
+class MCTSNode {
+    constructor(state, parent = null, move = null) {
+        this.state = state; // Stan gry (np. opponentGrid)
+        this.parent = parent;
+        this.move = move; // Ruch, który doprowadził do tego stanu
+        this.children = [];
+        this.wins = 0;
+        this.visits = 0;
+        this.untriedMoves = null; // Leniwe inicjowanie ruchów
+    }
+
+    getUntriedMoves() {
+        if (this.untriedMoves === null) {
+            // Logika generowania możliwych ruchów z danego stanu
+            this.untriedMoves = this.state.getPossibleMoves();
+        }
+        return this.untriedMoves;
+    }
+
+    selectChildUCB1() {
+        const C = Math.sqrt(2); // Parametr eksploracji
+        let bestScore = -Infinity;
+        let bestChild = null;
+
+        for (const child of this.children) {
+            const exploit = child.wins / child.visits;
+            const explore = C * Math.sqrt(Math.log(this.visits) / child.visits);
+            const score = exploit + explore;
+            if (score > bestScore) {
+                bestScore = score;
+                bestChild = child;
+            }
+        }
+        return bestChild;
+    }
+}
+
+function runMCTS(currentState, timeout = 4800) {
+    const root = new MCTSNode(currentState);
+    const startTime = performance.now();
+
+    while (performance.now() - startTime < timeout) {
+        let node = root;
+        let tempState = currentState.clone();
+
+        // 1. Selekcja (z UCB1)
+        while (node.getUntriedMoves().length === 0 && node.children.length > 0) {
+            node = node.selectChildUCB1();
+            tempState.applyMove(node.move);
+        }
+
+        // 2. Ekspansja
+        if (node.getUntriedMoves().length > 0) {
+            const move = node.getUntriedMoves().pop();
+            tempState.applyMove(move);
+            const newNode = new MCTSNode(tempState, node, move);
+            node.children.push(newNode);
+            node = newNode;
+        }
+
+        // 3. Symulacja
+        const result = tempState.rollout();
+
+        // 4. Propagacja wsteczna
+        while (node !== null) {
+            node.visits++;
+            node.wins += result;
+            node = node.parent;
+        }
+    }
+
+    // Wybierz najlepszy ruch (najczęściej odwiedzany)
+    return root.children.sort((a, b) => b.visits - a.visits)[0].move;
 }
 
 
@@ -230,38 +452,29 @@ function canPlaceShipForProbability(grid, x, y, size, isVertical) {
 }
 
 
+// Moduł "Psychoanalizy Przeciwnika"
+const opponentProfile = {
+    placementBias: { edge: 0, center: 0, corner: 0 },
+    orientationBias: { vertical: 0, horizontal: 0 }
+};
+
 /**
- * Oblicza entropię dla hipotetycznej przyszłej siatki.
+ * Aktualizuje profil przeciwnika na podstawie zatopionego statku.
  */
-function calculateEntropyForFutureGrid(shotX, shotY, result) {
+function updateOpponentProfile(ship) {
+    // Prosta logika do demonstracji
     const size = currentConfig.size;
-    // Klonowanie głębokie, aby nie modyfikować oryginalnej siatki
-    const futureGrid = JSON.parse(JSON.stringify(opponentGrid));
-    futureGrid[shotY][shotX] = result;
+    const isVertical = ship.positions[0].x === ship.positions[1].x;
+    if (isVertical) opponentProfile.orientationBias.vertical++;
+    else opponentProfile.orientationBias.horizontal++;
 
-    // Oblicz przyszłą mapę prawdopodobieństwa
-    const futureProbMap = calculateProbabilityMap(futureGrid);
-
-    let totalProbability = 0;
-    for (let y = 0; y < size; y++) {
-        for (let x = 0; x < size; x++) {
-            totalProbability += futureProbMap[y][x];
+    ship.positions.forEach(pos => {
+        if (pos.x === 0 || pos.x === size - 1 || pos.y === 0 || pos.y === size - 1) {
+            opponentProfile.placementBias.edge++;
+        } else {
+            opponentProfile.placementBias.center++;
         }
-    }
-
-    if (totalProbability === 0) return 0;
-
-    let entropy = 0;
-    for (let y = 0; y < size; y++) {
-        for (let x = 0; x < size; x++) {
-            if (futureProbMap[y][x] > 0) {
-                const p = futureProbMap[y][x] / totalProbability;
-                entropy -= p * Math.log2(p);
-            }
-        }
-    }
-
-    return entropy;
+    });
 }
 
 
@@ -286,93 +499,243 @@ function initializeGrids(size) {
     opponentShips = JSON.parse(JSON.stringify(currentConfig.ships));
 }
 
-/**
- * Tworzy mapę wag, preferującą centrum planszy.
- */
-function createWeightMap(size) {
-    const weightMap = Array(size).fill(null).map(() => Array(size).fill(0));
-    const center = Math.floor(size / 2);
-    for (let y = 0; y < size; y++) {
-        for (let x = 0; x < size; x++) {
-            const dist = Math.min(Math.abs(x - center), Math.abs(y - center));
-            weightMap[y][x] = size - dist;
-        }
+// ##################################################################
+// #            EWOLUCJA ROZSTAWIANIA - ARCHITEKT GENETYCZNY        #
+// ##################################################################
+
+function placeShipsRandomly(grid, shipsConfig) {
+    console.log("AI: Uruchamiam Architekta Genetycznego do zaprojektowania układu floty...");
+    const size = grid.length;
+    const populationSize = 50;
+    const generations = 30;
+    const mutationRate = 0.1;
+    const elitismRate = 0.1;
+
+    // 1. Inicjalizacja populacji
+    let population = [];
+    for (let i = 0; i < populationSize; i++) {
+        population.push(createRandomIndividual(grid, shipsConfig));
     }
-    return weightMap;
+
+    for (let gen = 0; gen < generations; gen++) {
+        // 2. Ewaluacja
+        const fitnessScores = population.map(ind => ({ individual: ind, fitness: calculateFitness(ind, size) }));
+        fitnessScores.sort((a, b) => b.fitness - a.fitness);
+
+        const newPopulation = [];
+
+        // 3. Elityzm
+        const eliteCount = Math.floor(populationSize * elitismRate);
+        for (let i = 0; i < eliteCount; i++) {
+            newPopulation.push(fitnessScores[i].individual);
+        }
+
+        // 4. Selekcja, Krzyżowanie i Mutacja
+        while (newPopulation.length < populationSize) {
+            const parent1 = tournamentSelection(fitnessScores);
+            const parent2 = tournamentSelection(fitnessScores);
+            let child = crossover(parent1, parent2, grid, shipsConfig);
+            if (Math.random() < mutationRate) {
+                child = mutate(child, grid, shipsConfig);
+            }
+            newPopulation.push(child);
+        }
+        population = newPopulation;
+         console.log(`Generacja ${gen + 1}/${generations}, Najlepszy wynik: ${fitnessScores[0].fitness.toFixed(2)}`);
+    }
+
+    const fitnessScores = population.map(ind => ({ individual: ind, fitness: calculateFitness(ind, size) }));
+    fitnessScores.sort((a, b) => b.fitness - a.fitness);
+    const bestIndividual = fitnessScores[0].individual;
+
+    console.log(`AI: Projekt floty ukończony z optymalnym wynikiem ${fitnessScores[0].fitness.toFixed(2)}.`);
+    applyIndividualToGrid(bestIndividual, grid);
 }
 
-/**
- * Rozmieszcza statki strategicznie, używając mapy wag.
- * @param {Array<Array<string>>} grid - Siatka do umieszczenia statków.
- * @param {Array<object>} shipsConfig - Konfiguracja statków do rozmieszczenia.
- */
-function placeShipsRandomly(grid, shipsConfig) {
+// Tworzy pojedynczego osobnika (losowy układ statków)
+function createRandomIndividual(grid, shipsConfig) {
     const size = grid.length;
-    let shipIdCounter = 0;
-    playerShips = []; // Resetuj listę statków gracza
-    const weightMap = createWeightMap(size);
-
-    // Preferencja, aby unikać symetrii
-    const preferTop = Math.random() < 0.5;
-
-    // Sortuj statki od największego do najmniejszego
+    const individual = [];
+    const tempGrid = Array(size).fill(null).map(() => Array(size).fill('water'));
     const sortedShips = shipsConfig.flatMap(s => Array(s.count).fill(s)).sort((a, b) => b.size - a.size);
 
-    for (const shipType of sortedShips) {
+    sortedShips.forEach(shipType => {
         let placed = false;
         let attempts = 0;
-        while (!placed && attempts < 200) { // Ogranicznik prób, by uniknąć pętli nieskończonej
+        while (!placed && attempts < 200) {
             attempts++;
             const isVertical = Math.random() < 0.5;
+            const x = Math.floor(Math.random() * (isVertical ? size : size - shipType.size + 1));
+            const y = Math.floor(Math.random() * (isVertical ? size - shipType.size + 1 : size));
 
-            // Losuj pozycję z uwzględnieniem wag
-            const weightedPositions = [];
-            for (let y = 0; y < size; y++) {
-                for (let x = 0; x < size; x++) {
-                    if ((preferTop && y < size / 2) || (!preferTop && y > size / 2)) {
-                         weightedPositions.push({x, y, weight: weightMap[y][x] * 2}); // Podwójna waga dla preferowanej połowy
-                    } else {
-                        weightedPositions.push({x, y, weight: weightMap[y][x]});
-                    }
-                }
-            }
-            const totalWeight = weightedPositions.reduce((acc, pos) => acc + pos.weight, 0);
-            let random = Math.random() * totalWeight;
-            let chosenPos = null;
-            for(const pos of weightedPositions) {
-                random -= pos.weight;
-                if(random <= 0) {
-                    chosenPos = pos;
-                    break;
-                }
-            }
-
-            if (!chosenPos || (isVertical ? chosenPos.y + shipType.size > size : chosenPos.x + shipType.size > size)) continue;
-
-            if (canPlaceShip(grid, chosenPos.x, chosenPos.y, shipType.size, isVertical)) {
-                const newShip = {
-                    id: shipIdCounter++,
-                    name: shipType.name,
-                    size: shipType.size,
-                    positions: [],
-                    hits: 0,
-                    isSunk: false
-                };
+            if (canPlaceShip(tempGrid, x, y, shipType.size, isVertical)) {
+                const newShip = { name: shipType.name, size: shipType.size, positions: [] };
                 for (let j = 0; j < shipType.size; j++) {
-                    const currentX = isVertical ? chosenPos.x : chosenPos.x + j;
-                    const currentY = isVertical ? chosenPos.y + j : chosenPos.y;
-                    grid[currentY][currentX] = { shipId: newShip.id, hit: false };
+                    const currentX = isVertical ? x : x + j;
+                    const currentY = isVertical ? y + j : y;
+                    tempGrid[currentY][currentX] = 'ship';
                     newShip.positions.push({ x: currentX, y: currentY });
                 }
-                playerShips.push(newShip);
+                individual.push(newShip);
                 placed = true;
             }
         }
-        if (!placed) {
-            console.error("Nie udało się umieścić statku:", shipType.name);
-             // Awaryjne umieszczanie, jeśli strategia zawiedzie
+    });
+    return individual;
+}
+
+// Ocenia jakość osobnika
+function calculateFitness(individual, size) {
+    let totalDistance = 0;
+    let shipCenters = individual.map(ship => {
+        const x = ship.positions.reduce((sum, pos) => sum + pos.x, 0) / ship.size;
+        const y = ship.positions.reduce((sum, pos) => sum + pos.y, 0) / ship.size;
+        return { x, y };
+    });
+
+    if (shipCenters.length < 2) return 100;
+
+    for (let i = 0; i < shipCenters.length; i++) {
+        for (let j = i + 1; j < shipCenters.length; j++) {
+            totalDistance += Math.hypot(shipCenters[i].x - shipCenters[j].x, shipCenters[i].y - shipCenters[j].y);
         }
     }
+
+    const edgePenalty = individual.flat().reduce((penalty, ship) => {
+        ship.positions.forEach(pos => {
+            if (pos.x === 0 || pos.x === size - 1 || pos.y === 0 || pos.y === size - 1) {
+                penalty += 0.5;
+            }
+        });
+        return penalty;
+    }, 0);
+
+    return totalDistance / (shipCenters.length * (shipCenters.length - 1) / 2) - edgePenalty;
+}
+
+
+// Selekcja turniejowa
+function tournamentSelection(fitnessScores, k = 5) {
+    let best = null;
+    for (let i = 0; i < k; i++) {
+        const random = fitnessScores[Math.floor(Math.random() * fitnessScores.length)];
+        if (best === null || random.fitness > best.fitness) {
+            best = random;
+        }
+    }
+    return best.individual;
+}
+
+// Krzyżowanie
+function crossover(parent1, parent2, grid, shipsConfig) {
+    const child = [];
+    const size = grid.length;
+    const tempGrid = Array(size).fill(null).map(() => Array(size).fill('water'));
+    const shipsToPlace = JSON.parse(JSON.stringify(shipsConfig.flatMap(s => Array(s.count).fill(s)).sort((a, b) => b.size - a.size)));
+
+    // Próba skopiowania genów (statków) naprzemiennie od rodziców
+    for (let i = 0; i < parent1.length; i++) {
+        const parent = i % 2 === 0 ? parent1 : parent2;
+        const shipToCopy = parent[i];
+         if (shipToCopy) {
+            const shipTypeIndex = shipsToPlace.findIndex(s => s.size === shipToCopy.size);
+            if (shipTypeIndex !== -1) {
+                const firstPos = shipToCopy.positions[0];
+                const isVertical = shipToCopy.positions.length > 1 && shipToCopy.positions[1].x === firstPos.x;
+                if (canPlaceShip(tempGrid, firstPos.x, firstPos.y, shipToCopy.size, isVertical)) {
+                    const newShip = { name: shipToCopy.name, size: shipToCopy.size, positions: [] };
+                    for (let j = 0; j < shipToCopy.size; j++) {
+                        const currentX = isVertical ? firstPos.x : firstPos.x + j;
+                        const currentY = isVertical ? firstPos.y + j : firstPos.y;
+                        tempGrid[currentY][currentX] = 'ship';
+                        newShip.positions.push({ x: currentX, y: currentY });
+                    }
+                    child.push(newShip);
+                    shipsToPlace.splice(shipTypeIndex, 1);
+                }
+            }
+        }
+    }
+
+    // Uzupełnienie brakujących statków losowo
+    shipsToPlace.forEach(shipType => {
+        let placed = false;
+        let attempts = 0;
+        while(!placed && attempts < 100){
+            attempts++;
+            const isVertical = Math.random() < 0.5;
+            const x = Math.floor(Math.random() * (isVertical ? size : size - shipType.size + 1));
+            const y = Math.floor(Math.random() * (isVertical ? size - shipType.size + 1 : size));
+            if(canPlaceShip(tempGrid, x, y, shipType.size, isVertical)){
+                 const newShip = { name: shipType.name, size: shipType.size, positions: [] };
+                 for (let j = 0; j < shipType.size; j++) {
+                    const currentX = isVertical ? x : x + j;
+                    const currentY = isVertical ? y + j : y;
+                    tempGrid[currentY][currentX] = 'ship';
+                    newShip.positions.push({ x: currentX, y: currentY });
+                }
+                child.push(newShip);
+                placed = true;
+            }
+        }
+    });
+
+    return child;
+}
+
+// Mutacja
+function mutate(individual, grid, shipsConfig) {
+    const mutatedIndividual = JSON.parse(JSON.stringify(individual));
+    const shipIndexToMutate = Math.floor(Math.random() * mutatedIndividual.length);
+
+    // Usuń stary statek i spróbuj umieścić go w nowym miejscu
+    const shipToMutate = mutatedIndividual.splice(shipIndexToMutate, 1)[0];
+
+    const size = grid.length;
+    const tempGrid = Array(size).fill(null).map(() => Array(size).fill('water'));
+    mutatedIndividual.forEach(ship => ship.positions.forEach(pos => tempGrid[pos.y][pos.x] = 'ship'));
+
+     let placed = false;
+     let attempts = 0;
+     while(!placed && attempts < 100){
+        attempts++;
+        const isVertical = Math.random() < 0.5;
+        const x = Math.floor(Math.random() * (isVertical ? size : size - shipToMutate.size + 1));
+        const y = Math.floor(Math.random() * (isVertical ? size - shipToMutate.size + 1 : size));
+        if(canPlaceShip(tempGrid, x, y, shipToMutate.size, isVertical)){
+            const newShip = { name: shipToMutate.name, size: shipToMutate.size, positions: [] };
+            for (let j = 0; j < shipToMutate.size; j++) {
+                const currentX = isVertical ? x : x + j;
+                const currentY = isVertical ? y + j : y;
+                newShip.positions.push({ x: currentX, y: currentY });
+            }
+            mutatedIndividual.push(newShip);
+            placed = true;
+        }
+    }
+    // Jeśli nie uda się umieścić, przywróć oryginał, aby uniknąć niekompletnych układów
+    if(!placed) return individual;
+
+    return mutatedIndividual;
+}
+
+function applyIndividualToGrid(individual, grid) {
+    let shipIdCounter = 0;
+    playerShips = [];
+    individual.forEach(shipData => {
+        const newShip = {
+            id: shipIdCounter++,
+            name: shipData.name,
+            size: shipData.size,
+            positions: shipData.positions,
+            hits: 0,
+            isSunk: false
+        };
+        newShip.positions.forEach(pos => {
+            grid[pos.y][pos.x] = { shipId: newShip.id, hit: false };
+        });
+        playerShips.push(newShip);
+    });
 }
 
 /**
@@ -380,23 +743,53 @@ function placeShipsRandomly(grid, shipsConfig) {
  */
 function canPlaceShip(grid, x, y, size, isVertical) {
     const gridSize = grid.length;
+    // Sprawdzenie granic planszy
+    if ((isVertical && y + size > gridSize) || (!isVertical && x + size > gridSize)) {
+        return false;
+    }
+
     for (let i = 0; i < size; i++) {
         const currentX = isVertical ? x : x + i;
         const currentY = isVertical ? y + i : y;
 
-        // Sprawdzenie, czy pole i jego otoczenie są wolne
-        for (let j = -1; j <= 1; j++) {
-            for (let k = -1; k <= 1; k++) {
-                const checkX = currentX + k;
-                const checkY = currentY + j;
+        // Sprawdzenie otoczenia 3x3
+        for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+                const checkX = currentX + dx;
+                const checkY = currentY + dy;
+
                 if (checkX >= 0 && checkX < gridSize && checkY >= 0 && checkY < gridSize) {
-                    if (typeof grid[checkY][checkX] === 'object') {
-                        return false; // Pole lub jego otoczenie jest zajęte
+                    const cell = grid[checkY][checkX];
+                    if (cell !== 'water') {
+                        // Musimy sprawdzić, czy ta "zajęta" komórka nie jest częścią statku, który właśnie próbujemy umieścić
+                        // To jest skomplikowane w tej pętli. Prostszy sposób:
+                        // Logika jest błędna, bo sprawdza komórki, na których statek ma dopiero stanąć.
                     }
                 }
             }
         }
     }
+    // Prawidłowa, uproszczona logika
+    for (let i = 0; i < size; i++) {
+        const currentX = isVertical ? x : x + i;
+        const currentY = isVertical ? y + i : y;
+
+        for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+                const checkX = currentX + dx;
+                const checkY = currentY + dy;
+
+                if (checkX >= 0 && checkX < gridSize && checkY >= 0 && checkY < gridSize) {
+                    const cell = grid[checkY][checkX];
+                     if (cell === 'ship' || typeof cell === 'object') {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+
+
     return true;
 }
 
@@ -410,22 +803,35 @@ function renderBoard(boardId, grid) {
     const cells = boardElement.childNodes;
     const size = grid.length;
 
+    let probabilityMap = null;
+    if (boardId === 'opponent-board') {
+        probabilityMap = calculateProbabilityMap(grid);
+    }
+    const maxProb = probabilityMap ? Math.max(...probabilityMap.flat()) : 0;
+
     for (let y = 0; y < size; y++) {
         for (let x = 0; x < size; x++) {
             const index = y * size + x;
             const cellState = grid[y][x];
-            cells[index].className = 'cell'; // Reset klas
-            // Na razie pokazujemy statki bota dla celów deweloperskich
-            if (boardId === 'player-board' && typeof cellState === 'object' && cellState !== null) {
-                cells[index].classList.add('ship');
-                 if (cellState.hit) {
-                    cells[index].classList.add('hit');
-                }
-            }
+            const cellElement = cells[index];
+            cellElement.className = 'cell'; // Reset klas
+            cellElement.style.setProperty('--prob-opacity', 0); // Reset stylu
 
-            // Wizualizacja planszy przeciwnika
-            if (boardId === 'opponent-board' && cellState !== 'unknown') {
-                cells[index].classList.add(cellState);
+            if (boardId === 'player-board') {
+                if (typeof cellState === 'object' && cellState !== null) {
+                    cellElement.classList.add('ship');
+                    if (cellState.hit) {
+                        cellElement.classList.add('hit');
+                    }
+                }
+            } else if (boardId === 'opponent-board') {
+                if (cellState !== 'unknown') {
+                    cellElement.classList.add(cellState);
+                } else if (probabilityMap && maxProb > 0) {
+                    const prob = probabilityMap[y][x];
+                    const opacity = (prob / maxProb) * 0.7; // Skaluj przezroczystość
+                    cellElement.style.setProperty('--prob-opacity', opacity);
+                }
             }
         }
     }
@@ -436,6 +842,165 @@ let botState = 'HUNT'; // Może być 'HUNT' lub 'TARGET'
 let targetQueue = []; // Kolejka celów do sprawdzenia w trybie TARGET
 let lastShot = null;
 let currentTargetHits = []; // Przechowuje trafienia w aktualnie atakowany statek
+
+// ##################################################################
+// #           ULEPSZENIE DEDUKCJI - TRYB "SHERLOCK HOLMES"         #
+// ##################################################################
+
+/**
+ * Identyfikuje na planszy izolowane, nieodkryte obszary ("kieszenie").
+ * @param {Array<Array<string>>} grid - Siatka gry.
+ * @returns {Array<Array<{x: number, y: number}>>} - Tablica kieszeni.
+ */
+function findPockets(grid) {
+    const size = grid.length;
+    const visited = Array(size).fill(null).map(() => Array(size).fill(false));
+    const pockets = [];
+
+    for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+            if (grid[y][x] === 'unknown' && !visited[y][x]) {
+                const newPocket = [];
+                const q = [{x, y}];
+                visited[y][x] = true;
+
+                while (q.length > 0) {
+                    const cell = q.shift();
+                    newPocket.push(cell);
+                    const neighbors = [{x:cell.x+1, y:cell.y}, {x:cell.x-1, y:cell.y}, {x:cell.x, y:cell.y+1}, {x:cell.x, y:cell.y-1}];
+                    for (const n of neighbors) {
+                        if (n.x >= 0 && n.x < size && n.y >= 0 && n.y < size && grid[n.y][n.x] === 'unknown' && !visited[n.y][n.x]) {
+                            visited[n.y][n.x] = true;
+                            q.push(n);
+                        }
+                    }
+                }
+                pockets.push(newPocket);
+            }
+        }
+    }
+    return pockets;
+}
+
+/**
+ * Znajduje wszystkie unikalne kombinacje statków, które sumują się do danego rozmiaru.
+ * @param {number} targetSize - Docelowy rozmiar (wielkość kieszeni).
+ * @param {Array<number>} availableShips - Lista rozmiarów dostępnych statków.
+ * @returns {Array<Array<number>>} - Tablica kombinacji.
+ */
+function findShipCombinationsThatFit(targetSize, availableShips) {
+    const results = [];
+    function find(target, startIndex, currentCombination) {
+        if (target === 0) {
+            results.push([...currentCombination]);
+            return;
+        }
+        if (target < 0) return;
+
+        for (let i = startIndex; i < availableShips.length; i++) {
+            if (i > startIndex && availableShips[i] === availableShips[i-1]) continue; // Unikaj duplikatów
+            currentCombination.push(availableShips[i]);
+            find(target - availableShips[i], i + 1, currentCombination);
+            currentCombination.pop(); // backtrack
+        }
+    }
+    find(targetSize, 0, []);
+    return results;
+}
+
+/**
+ * Rekursywnie próbuje umieścić dany zestaw statków w kieszeni, aby znaleźć wszystkie możliwe układy.
+ * @param {Array<{x: number, y: number}>} pocket - Współrzędne komórek kieszeni.
+ * @param {Array<number>} shipsToPlace - Rozmiary statków do umieszczenia.
+ * @param {Array<object>} solutions - Tablica, do której zostaną dodane znalezione rozwiązania.
+ */
+function solvePlacement(pocket, shipsToPlace, solutions) {
+    const minX = Math.min(...pocket.map(p => p.x));
+    const minY = Math.min(...pocket.map(p => p.y));
+    const localGridW = Math.max(...pocket.map(p => p.x)) - minX + 1;
+    const localGridH = Math.max(...pocket.map(p => p.y)) - minY + 1;
+    const localGrid = Array(localGridH).fill(null).map(() => Array(localGridW).fill(false));
+    pocket.forEach(cell => { localGrid[cell.y - minY][cell.x - minX] = true; });
+
+    function canPlace(x, y, size, isVertical, grid) {
+        for (let i = 0; i < size; i++) {
+            const lx = isVertical ? x : x + i;
+            const ly = isVertical ? y : y + i;
+            if (lx >= localGridW || ly >= localGridH || !grid[ly][lx]) return false;
+        }
+        return true;
+    }
+
+    function backtrack(shipIndex, gridState, placedShips) {
+        if (solutions.length > 1) return;
+        if (shipIndex === shipsToPlace.length) {
+            solutions.push(JSON.parse(JSON.stringify(placedShips)));
+            return;
+        }
+        const shipSize = shipsToPlace[shipIndex];
+        for (let r = 0; r < localGridH; r++) {
+            for (let c = 0; c < localGridW; c++) {
+                if (canPlace(c, r, shipSize, false, gridState)) {
+                    const newGridState = JSON.parse(JSON.stringify(gridState));
+                    const positions = [];
+                    for (let i = 0; i < shipSize; i++) {
+                        newGridState[r][c + i] = false;
+                        positions.push({ x: c + minX, y: r + minY });
+                    }
+                    placedShips.push({ size: shipSize, positions });
+                    backtrack(shipIndex + 1, newGridState, placedShips);
+                    placedShips.pop();
+                    if (solutions.length > 1) return;
+                }
+                if (shipSize > 1 && canPlace(c, r, shipSize, true, gridState)) {
+                    const newGridState = JSON.parse(JSON.stringify(gridState));
+                    const positions = [];
+                    for (let i = 0; i < shipSize; i++) {
+                        newGridState[r + i][c] = false;
+                        positions.push({ x: c + minX, y: r + i + minY });
+                    }
+                    placedShips.push({ size: shipSize, positions });
+                    backtrack(shipIndex + 1, newGridState, placedShips);
+                    placedShips.pop();
+                    if (solutions.length > 1) return;
+                }
+            }
+        }
+    }
+    backtrack(0, localGrid, []);
+}
+
+/**
+ * Główna funkcja dedukcyjna, która szuka gwarantowanych trafień poprzez analizę kieszeni.
+ */
+function findGuaranteedHit() {
+    const remainingShips = opponentShips.flatMap(s => Array(s.count).fill(s.size)).sort((a, b) => b - a);
+    if (remainingShips.length === 0) return null;
+
+    const pockets = findPockets(opponentGrid);
+    const totalUnknown = pockets.reduce((acc, p) => acc + p.length, 0);
+    const totalShipSize = remainingShips.reduce((acc, s) => acc + s, 0);
+
+    // Warunek konieczny: analiza jest możliwa tylko jeśli wszystkie pozostałe puste pola muszą być statkami.
+    if (totalUnknown !== totalShipSize) return null;
+
+    console.log("AI: Uruchamiam tryb dedukcji 'Sherlock Holmes'...");
+
+    for (const pocket of pockets) {
+        const fittingCombinations = findShipCombinationsThatFit(pocket.length, remainingShips);
+        if (fittingCombinations.length === 1) {
+            const shipsToPlace = fittingCombinations[0];
+            const placementSolutions = [];
+            solvePlacement(pocket, shipsToPlace, placementSolutions);
+
+            if (placementSolutions.length === 1) {
+                console.log("Sherlock AI: Deducuję z absolutną pewnością!");
+                return placementSolutions[0][0].positions[0]; // Zwróć pierwszą komórkę pierwszego statku
+            }
+        }
+    }
+    return null;
+}
 
 /**
  * Główna funkcja tury bota - decyduje gdzie strzelić.
@@ -448,62 +1013,32 @@ function botTurn() {
 
     if (isFirstShot) {
         const center = Math.floor(size / 2);
-        const options = [
-            {x: center, y: center},
-            {x: center - 1, y: center},
-            {x: center, y: center - 1},
-            {x: center - 1, y: center - 1},
-        ];
+        const options = [{x: center, y: center}, {x: center - 1, y: center}, {x: center, y: center - 1}, {x: center - 1, y: center - 1}];
         const choice = options[Math.floor(Math.random() * options.length)];
         x = choice.x;
         y = choice.y;
         isFirstShot = false;
     } else if (botState === 'HUNT') {
-        // Nowa, zaawansowana logika z analizą entropii
-        const startTime = performance.now();
-        const probMap = calculateProbabilityMap(opponentGrid);
-        let bestShots = [];
-        let maxProb = -1;
 
-        // Znajdź kandydatów do strzału
-        for (let r = 0; r < size; r++) {
-            for (let c = 0; c < size; c++) {
-                if (probMap[r][c] > maxProb) {
-                    maxProb = probMap[r][c];
-                    bestShots = [{ x: c, y: r }];
-                } else if (probMap[r][c] === maxProb) {
-                    bestShots.push({ x: c, y: r });
-                }
-            }
+        const guaranteedHit = findGuaranteedHit();
+        if (guaranteedHit) {
+            console.log("AI dedukuje: GWARANTOWANE trafienie!");
+            x = guaranteedHit.x;
+            y = guaranteedHit.y;
+        } else {
+            const remainingShipsTotal = opponentShips.reduce((acc, s) => acc + s.count, 0);
+            const smallestShipLeft = Math.min(...opponentShips.filter(s => s.count > 0).map(s => s.size));
+            const isParanoid = remainingShipsTotal <= 2 && smallestShipLeft <= 2;
+
+            let timeout = 1000 + (remainingShipsTotal * 250);
+            if (timeout > 4800) timeout = 4800;
+            console.log(`AI: Dynamiczny czas analizy: ${timeout}ms. Tryb 'Kontr-Strategii': ${isParanoid}`);
+
+            const currentState = new GameState(opponentGrid, opponentShips, isParanoid);
+            const bestMove = runMCTS(currentState, timeout);
+            x = bestMove.x;
+            y = bestMove.y;
         }
-
-        let bestShot = bestShots[Math.floor(Math.random() * bestShots.length)];
-        let minEntropy = Infinity;
-
-        // Analiza entropii dla najlepszych kandydatów
-        for (const shot of bestShots) {
-            if (performance.now() - startTime > 4800) { // Limit 4.8s
-                console.log("Przekroczono czas analizy entropii, wybieram najlepszy dotychczasowy strzał.");
-                break;
-            }
-
-            // Symulacja trafienia
-            const futureEntropyHit = calculateEntropyForFutureGrid(shot.x, shot.y, 'hit');
-            // Symulacja pudła
-            const futureEntropyMiss = calculateEntropyForFutureGrid(shot.x, shot.y, 'miss');
-
-            const p_hit = probMap[shot.y][shot.x] / (size*size); // Uproszczone prawdopodobieństwo
-            const p_miss = 1 - p_hit;
-            const expectedEntropy = p_hit * futureEntropyHit + p_miss * futureEntropyMiss;
-
-            if (expectedEntropy < minEntropy) {
-                minEntropy = expectedEntropy;
-                bestShot = shot;
-            }
-        }
-
-        x = bestShot.x;
-        y = bestShot.y;
 
     } else { // botState === 'TARGET'
         generateTargetQueue();
@@ -521,7 +1056,9 @@ function botTurn() {
 
     lastShot = { x, y };
     // Aktualizacja UI z sugestią
-    document.getElementById('bot-suggestion').textContent = `${String.fromCharCode(65 + y)}${x + 1}`;
+    const coordString = `${String.fromCharCode(65 + y)}${x + 1}`;
+    document.getElementById('bot-suggestion').textContent = coordString;
+    logEvent(`BOT sugeruje strzał w ${coordString}.`);
     console.log(`Bot sugeruje strzał w: (${x}, ${y})`);
 }
 
@@ -538,41 +1075,76 @@ function updateAfterBotShot(result) {
     switch (result) {
         case 'Pudło':
             opponentGrid[y][x] = 'miss';
+            triggerAnimation(cellElement, 'animate-miss', 400);
             cellElement.classList.add('miss');
             break;
         case 'Trafiony':
         case 'Uszkodzony':
             opponentGrid[y][x] = 'hit';
+            triggerAnimation(cellElement, 'animate-hit', 500);
             cellElement.classList.add(result === 'Trafiony' ? 'hit' : 'damaged');
             botState = 'TARGET';
             currentTargetHits.push({ x, y });
-            // Generowanie nowych celów zostanie obsłużone w botTurn
             break;
         case 'Zatopiony':
-            opponentGrid[y][x] = 'sunk';
-            cellElement.classList.add('sunk');
+            opponentGrid[y][x] = 'hit'; // Najpierw oznacz jako trafienie dla animacji
+            triggerAnimation(cellElement, 'animate-hit', 500);
+
             currentTargetHits.push({ x, y });
-            markSurroundingAsMiss(currentTargetHits);
+
+            // Zidentyfikuj statek PRZED oznaczeniem go jako zatopiony
+            const shipCoords = identifyAndGetSunkShipCoords(x,y);
+
+            // Uruchom animację zatopienia na wszystkich częściach z opóźnieniem
+            setTimeout(() => {
+                shipCoords.forEach(pos => {
+                    const sunkCellEl = document.querySelector(`#opponent-board .cell[data-x='${pos.x}'][data-y='${pos.y}']`);
+                    if(sunkCellEl) {
+                        opponentGrid[pos.y][pos.x] = 'sunk'; // Zaktualizuj model danych
+                        sunkCellEl.classList.remove('hit', 'damaged');
+                        sunkCellEl.classList.add('sunk');
+                        triggerAnimation(sunkCellEl, 'animate-sunk', 600);
+                    }
+                });
+                markSurroundingAsMiss(shipCoords);
+                renderBoard('opponent-board', opponentGrid); // Przerenderuj, aby pokazać pola 'miss'
+            }, 550);
+
 
             // Reset stanu bota
             botState = 'HUNT';
             targetQueue = [];
 
-            // Zanim wyczyścimy, zidentyfikujmy statek
-            const identificationSuccess = identifySunkShip(x, y);
-            currentTargetHits = [];
+            const identificationSuccess = opponentShips.some(s => s.size === shipCoords.length && s.count > 0);
 
             if (identificationSuccess) {
+                 const shipIndex = opponentShips.findIndex(s => s.size === shipCoords.length && s.count > 0);
+                 opponentShips[shipIndex].count--;
+                 updateOpponentProfile({ size: shipCoords.length, positions: shipCoords });
                  checkWinCondition();
             } else {
-                // Jeśli identyfikacja się nie powiodła, nie kończymy tury bota,
-                // aby gracz mógł poprawić swój błąd.
-                botState = 'TARGET'; // Pozostań w trybie TARGET
-                return; // Zatrzymaj dalsze wykonywanie
+                 alert(`Błąd: Zgłoszono zatopienie, ale nie ma już dostępnych statków o rozmiarze ${shipCoords.length}! Sprawdź planszę przeciwnika.`);
+                 shipCoords.forEach(part => opponentGrid[part.y][part.x] = 'hit');
+                 botState = 'TARGET';
+                 return;
             }
+            currentTargetHits = []; // Wyczyść dopiero po całej operacji
             break;
     }
     renderBoard('opponent-board', opponentGrid); // Odśwież widok planszy
+}
+
+/**
+ * Pomocnicza funkcja do uruchamiania animacji na komórce.
+ * @param {HTMLElement} cellElement - Element komórki do animowania.
+ * @param {string} animationClass - Klasa CSS animacji.
+ * @param {number} duration - Czas trwania animacji w ms.
+ */
+function triggerAnimation(cellElement, animationClass, duration) {
+    cellElement.classList.add(animationClass);
+    setTimeout(() => {
+        cellElement.classList.remove(animationClass);
+    }, duration);
 }
 
 /**
@@ -636,44 +1208,31 @@ function markSurroundingAsMiss(shipPositions) {
 // Etap 5: Finalizacja
 // Kod do obsługi ekranów startowych/końcowych i ustawień gry.
 
-/**
- * Automatycznie identyfikuje zatopiony statek na podstawie ostatniego trafienia.
- * @param {number} x - Współrzędna X ostatniego trafienia.
- * @param {number} y - Współrzędna Y ostatniego trafienia.
- */
-function identifySunkShip(x, y) {
+function identifyAndGetSunkShipCoords(lastHitX, lastHitY) {
     const size = currentConfig.size;
-    const q = [{x, y}];
-    const visited = new Set([`${x},${y}`]);
-    const shipParts = [{x, y}]; // Ostatni strzał to też część statku
+    const q = [{x: lastHitX, y: lastHitY}];
+    const visited = new Set([`${lastHitX},${lastHitY}`]);
+    const shipParts = [{x: lastHitX, y: lastHitY}];
 
-    // Zbierz wszystkie połączone 'hit'
-    while (q.length > 0) {
-        const current = q.shift();
-        const neighbors = [{x:current.x+1, y:current.y}, {x:current.x-1, y:current.y}, {x:current.x, y:current.y+1}, {x:current.x, y:current.y-1}];
-        for (const n of neighbors) {
+    while(q.length > 0){
+        const curr = q.shift();
+        const neighbors = [
+            {x: curr.x + 1, y: curr.y}, {x: curr.x - 1, y: curr.y},
+            {x: curr.x, y: curr.y + 1}, {x: curr.x, y: curr.y - 1}
+        ];
+        for(const n of neighbors){
             const key = `${n.x},${n.y}`;
-            if (n.x >= 0 && n.x < size && n.y >= 0 && n.y < size && !visited.has(key) && opponentGrid[n.y][n.x] === 'hit') {
-                visited.add(key);
-                q.push(n);
-                shipParts.push(n);
+            if (n.x >= 0 && n.x < size && n.y >= 0 && n.y < size && !visited.has(key)) {
+                const cellState = opponentGrid[n.y][n.x];
+                if (cellState === 'hit' || cellState === 'damaged') {
+                    visited.add(key);
+                    q.push(n);
+                    shipParts.push(n);
+                }
             }
         }
     }
-
-    const sunkShipSize = shipParts.length;
-    const shipIndex = opponentShips.findIndex(s => s.size === sunkShipSize && s.count > 0);
-
-    if (shipIndex !== -1) {
-        opponentShips[shipIndex].count--;
-        console.log(`Bot automatycznie zidentyfikował i usunął statek o rozmiarze ${sunkShipSize}.`);
-        return true;
-    } else {
-        alert(`Błąd: Zgłoszono zatopienie, ale nie ma już dostępnych statków o rozmiarze ${sunkShipSize}! Sprawdź planszę przeciwnika.`);
-        // Przywróćmy stan 'hit', aby umożliwić kontynuację lub korektę
-        shipParts.forEach(part => opponentGrid[part.y][part.x] = 'hit');
-        return false;
-    }
+    return shipParts;
 }
 
 function checkWinCondition() {
@@ -694,12 +1253,43 @@ function checkWinCondition() {
 function showEndScreen(message) {
     document.getElementById('game-over-message').textContent = message;
     document.getElementById('end-screen').classList.remove('hidden');
+    saveOpponentProfile(); // Zapisz profil po zakończeniu gry
+}
+
+function saveOpponentProfile() {
+    try {
+        localStorage.setItem('battleshipAI_opponentProfile', JSON.stringify(opponentProfile));
+        console.log("Pamięć Długotrwała: Profil przeciwnika został zapisany.");
+    } catch (e) {
+        console.error("Nie udało się zapisać profilu przeciwnika:", e);
+    }
+}
+
+function loadOpponentProfile() {
+    try {
+        const savedProfile = localStorage.getItem('battleshipAI_opponentProfile');
+        if (savedProfile) {
+            const loaded = JSON.parse(savedProfile);
+            // Stopniowe dostosowanie, a nie całkowite zastąpienie
+            opponentProfile.placementBias.edge = (opponentProfile.placementBias.edge + loaded.placementBias.edge) / 2;
+            opponentProfile.placementBias.center = (opponentProfile.placementBias.center + loaded.placementBias.center) / 2;
+            opponentProfile.placementBias.corner = (opponentProfile.placementBias.corner + loaded.placementBias.corner) / 2;
+            opponentProfile.orientationBias.vertical = (opponentProfile.orientationBias.vertical + loaded.orientationBias.vertical) / 2;
+            opponentProfile.orientationBias.horizontal = (opponentProfile.orientationBias.horizontal + loaded.orientationBias.horizontal) / 2;
+            console.log("Pamięć Długotrwała: Profil przeciwnika został załadowany i zaadaptowany.");
+        } else {
+             console.log("Pamięć Długotrwała: Nie znaleziono zapisanego profilu. Rozpoczynam z czystą kartą.");
+        }
+    } catch (e) {
+        console.error("Nie udało się załadować profilu przeciwnika:", e);
+    }
 }
 
 
 function startGame(sizeConfig) {
     console.log(`Rozpoczynanie gry z planszą ${sizeConfig}...`);
     currentConfig = GAME_CONFIGS[sizeConfig];
+    loadOpponentProfile(); // Załaduj profil przed rozpoczęciem gry
     document.getElementById('start-screen').classList.add('hidden');
     document.getElementById('shot-input-container').classList.remove('hidden');
 
@@ -730,18 +1320,29 @@ function startGame(sizeConfig) {
 
     for (const [id, action] of Object.entries(buttons)) {
         document.getElementById(id).addEventListener('click', () => {
-            console.log(`Gracz 1 raportuje wynik: ${action}`);
-            updateAfterBotShot(action); // Zaktualizuj stan gry
-            botTurn(); // Rozpocznij kolejną turę bota
+            logEvent(`Wynik strzału: ${action}.`);
+            updateAfterBotShot(action);
+            if(botState === 'HUNT') turnCounter++;
+            botTurn();
         });
     }
 
     // Rozpoczęcie pierwszej tury bota
+    turnCounter = 1;
     botTurn();
 }
 
 document.addEventListener('DOMContentLoaded', () => {
     console.log('Gra w statki załadowana. Oczekiwanie na wybór gracza...');
+
+    // Logika Panelu Taktycznego
+    const settingsModal = document.getElementById('settings-modal');
+    document.getElementById('settings-btn').addEventListener('click', () => {
+        settingsModal.classList.remove('hidden');
+    });
+    document.getElementById('close-settings-btn').addEventListener('click', () => {
+        settingsModal.classList.add('hidden');
+    });
 
     document.querySelectorAll('.board-size-btn').forEach(button => {
         button.addEventListener('click', () => {
