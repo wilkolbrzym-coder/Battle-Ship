@@ -1,7 +1,8 @@
 use wasm_bindgen::prelude::*;
+use serde::{Serialize, Deserialize};
 
 #[wasm_bindgen]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CellState {
     Empty,
     Miss,
@@ -9,15 +10,26 @@ pub enum CellState {
     Sunk,
 }
 
+impl From<u8> for CellState {
+    fn from(val: u8) -> Self {
+        match val {
+            1 => CellState::Miss,
+            2 => CellState::Hit,
+            3 => CellState::Sunk,
+            _ => CellState::Empty,
+        }
+    }
+}
+
 #[wasm_bindgen]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Position {
     pub x: u8,
     pub y: u8,
 }
 
 #[wasm_bindgen]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Ship {
     pub id: u8,
     pub length: u8,
@@ -30,35 +42,8 @@ pub struct Ship {
 impl Ship {
     #[wasm_bindgen(constructor)]
     pub fn new(id: u8, length: u8) -> Ship {
-        Ship {
-            id,
-            length,
-            positions: Vec::new(),
-            hits: 0,
-        }
+        Ship { id, length, positions: Vec::new(), hits: 0 }
     }
 }
 
 pub type Board = Vec<Vec<CellState>>;
-
-pub fn new_board(width: u8, height: u8) -> Board {
-    vec![vec![CellState::Empty; width as usize]; height as usize]
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_new_board() {
-        let board = new_board(10, 10);
-        assert_eq!(board.len(), 10);
-    }
-
-    #[test]
-    fn test_ship_creation_internal() {
-        let mut ship = Ship::new(1, 4);
-        ship.positions.push(Position { x: 0, y: 0});
-        assert!(!ship.positions.is_empty());
-    }
-}

@@ -28,9 +28,10 @@ pub struct JsGameEngine {
 
 #[wasm_bindgen]
 impl JsGameEngine {
+    #[wasm_bindgen(constructor)]
     pub fn new(size: u8, ship_config: Vec<u8>) -> Self {
         console_error_panic_hook::set_once();
-        let opponent_ships = ship_config.into_iter().fold(Vec::<(u8,u8)>::new(), |mut acc, size| {
+        let opponent_ships = ship_config.into_iter().fold(Vec::<(u8, u8)>::new(), |mut acc, size| {
             if let Some(e) = acc.iter_mut().find(|e| e.0 == size) { e.1 += 1; } else { acc.push((size, 1)); }
             acc
         });
