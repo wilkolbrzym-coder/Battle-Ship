@@ -172,7 +172,7 @@ function initializeQuantumHunter() {
     console.log("AI: Inicjalizacja Silnika 'Możliwych Rzeczywistości'...");
     const size = currentConfig.size;
     const shipsConfig = currentConfig.ships;
-    const maxLayouts = 5000; // Ograniczenie, aby uniknąć problemów z wydajnością
+    const maxLayouts = 50000; // Zwiększone na życzenie użytkownika
 
     allPossibleOpponentLayouts = [];
     let attempts = 0;
