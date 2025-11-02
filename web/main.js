@@ -1,5 +1,5 @@
 // Import z modułu WASM
-import init, { JsGameEngine } from './pkg/feniks_ai.js';
+import init, { JsGameEngine } from './wasm_build/feniks_ai.js';
 
 // Konfiguracje gry
 const GAME_CONFIGS = {
