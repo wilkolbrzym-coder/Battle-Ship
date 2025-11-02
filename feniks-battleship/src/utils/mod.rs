@@ -10,7 +10,7 @@ pub enum CellState {
 }
 
 #[wasm_bindgen]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Position {
     pub x: u8,
     pub y: u8,
@@ -21,7 +21,7 @@ pub struct Position {
 pub struct Ship {
     pub id: u8,
     pub length: u8,
-    #[wasm_bindgen(skip)]
+    #[wasm_bindgen(getter_with_clone)]
     pub positions: Vec<Position>,
     pub hits: u8,
 }
@@ -36,16 +36,6 @@ impl Ship {
             positions: Vec::new(),
             hits: 0,
         }
-    }
-
-    #[wasm_bindgen(getter = positions)]
-    pub fn get_positions_for_js(&self) -> js_sys::Array {
-        self.positions.iter().map(|pos| {
-            let obj = js_sys::Object::new();
-            js_sys::Reflect::set(&obj, &"x".into(), &JsValue::from(pos.x)).unwrap();
-            js_sys::Reflect::set(&obj, &"y".into(), &JsValue::from(pos.y)).unwrap();
-            JsValue::from(obj)
-        }).collect()
     }
 }
 

@@ -19,7 +19,7 @@ impl GeneticArchitect {
         Self { width, height, ship_lengths }
     }
 
-    pub fn generate_best_layout(&self, generations: usize, population_size: usize) -> Vec<Ship> {
+    pub fn generate_best_layout(&self, generations: usize, population_size: usize) -> Individual {
         let mutation_rate = 0.1;
         let elitism_count = 5;
 
@@ -50,7 +50,7 @@ impl GeneticArchitect {
             population = new_population;
         }
         population.sort_by(|a, b| b.fitness.partial_cmp(&a.fitness).unwrap());
-        population[0].ships.clone()
+        population[0].clone()
     }
 
     fn calculate_fitness(&self, individual: &Individual) -> f64 {
@@ -184,7 +184,7 @@ fn is_valid(ships: &[Ship], width: u8, height: u8) -> bool {
         let pos = ship.positions[0];
         let is_horizontal = ship.positions.len() > 1 && ship.positions[0].y == ship.positions[1].y;
 
-        let temp_board = board.clone();
+        let mut temp_board = board.clone();
         let can_place = can_place_ship(&temp_board, ship.length, pos, is_horizontal);
 
         if !can_place { return false; }

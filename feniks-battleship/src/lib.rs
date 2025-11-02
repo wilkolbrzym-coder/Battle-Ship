@@ -1,56 +1,69 @@
-mod utils;
-mod engine;
 mod analysis;
+mod engine;
 mod genetics;
+mod utils;
 
 use wasm_bindgen::prelude::*;
 use crate::engine::QuantumHunter;
+use crate::genetics::GeneticArchitect;
 use crate::utils::{Position, CellState, Ship};
 
-#[wasm_bindgen(start)]
-pub fn main_js() -> Result<(), JsValue> {
-    Ok(())
-}
-
 #[wasm_bindgen]
-pub struct FeniksAI {
+pub struct JsGameEngine {
     hunter: QuantumHunter,
-    player_ships: Vec<Ship>,
+    player_board: Vec<Vec<u8>>,
+    ship_lengths: Vec<u8>,
+    width: u8,
+    height: u8,
 }
 
 #[wasm_bindgen]
-impl FeniksAI {
+impl JsGameEngine {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> FeniksAI {
-        let width = 10;
-        let height = 10;
-        let ship_lengths = vec![5, 4, 3, 3, 2];
-
-        let player_ships = genetics::run_genetic_algorithm(width, height, &ship_lengths);
-
-        FeniksAI {
-            hunter: QuantumHunter::new(width, height, &ship_lengths),
-            player_ships,
+    pub fn new(width: u8, height: u8, ship_lengths: Vec<u8>) -> Self {
+        Self {
+            hunter: QuantumHunter::new_empty(width, height),
+            player_board: vec![vec![0; width as usize]; height as usize],
+            ship_lengths,
+            width,
+            height,
         }
     }
 
-    pub fn get_best_move(&self) -> Position {
+    #[wasm_bindgen]
+    pub fn start_ai_processing(&mut self) {
+        let architect = GeneticArchitect::new(self.width, self.height, self.ship_lengths.clone());
+        let best_fleet: Vec<Ship> = architect.generate_best_layout(100, 50);
+
+        let mut player_board_repr = vec![vec![0; self.width as usize]; self.height as usize];
+        for ship in &best_fleet {
+            for pos in &ship.positions {
+                if (pos.y as usize) < self.height as usize && (pos.x as usize) < self.width as usize {
+                    player_board_repr[pos.y as usize][pos.x as usize] = 1;
+                }
+            }
+        }
+        self.player_board = player_board_repr;
+
+        self.hunter = QuantumHunter::new(self.width, self.height, &self.ship_lengths);
+        self.hunter.initialize();
+    }
+
+    pub fn get_player_fleet_layout(&self) -> Vec<u8> {
+        self.player_board.clone().into_iter().flatten().collect()
+    }
+
+    pub fn get_best_bot_move(&self) -> Position {
         let (x, y) = self.hunter.find_best_move();
         Position { x, y }
     }
 
-    #[wasm_bindgen(getter = playerShips)]
-    pub fn get_player_ships_for_js(&self) -> js_sys::Array {
-        self.player_ships.iter().map(|ship| {
-            let obj = js_sys::Object::new();
-            js_sys::Reflect::set(&obj, &"id".into(), &JsValue::from(ship.id)).unwrap();
-            js_sys::Reflect::set(&obj, &"length".into(), &JsValue::from(ship.length)).unwrap();
-            js_sys::Reflect::set(&obj, &"positions".into(), &ship.get_positions_for_js()).unwrap();
-            JsValue::from(obj)
-        }).collect()
-    }
-
-    pub fn apply_shot_result(&mut self, x: u8, y: u8, result: CellState) {
-        self.hunter.apply_shot(Position { x, y }, result);
+    pub fn apply_bot_shot_result(&mut self, x: u8, y: u8, result: u8) {
+        let cell_result = match result {
+            1 => CellState::Miss,
+            2 => CellState::Hit,
+            _ => CellState::Empty,
+        };
+        self.hunter.apply_shot(Position { x, y }, cell_result);
     }
 }
