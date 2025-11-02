@@ -217,36 +217,78 @@ function initializeQuantumHunter() {
 }
 
 /**
- * Generuje pojedynczy, losowy, ale w pełni prawidłowy układ statków.
+ * Generuje losowy układ statków zgodny ze znanymi ograniczeniami z opponentGrid.
  * @param {number} size - Rozmiar planszy.
- * @param {Array<object>} shipsConfig - Konfiguracja statków.
- * @returns {Array<Array<string>>|null} - Siatka z układem lub null, jeśli się nie udało.
+ * @param {Array<object>} shipsConfig - Konfiguracja statków do umieszczenia.
+ * @param {Array<Array<string>>} constraints - Siatka opponentGrid z 'miss', 'hit', 'sunk'.
+ * @returns {Array<Array<string>>|null}
  */
-function generateRandomValidLayout(size, shipsConfig) {
-    const grid = Array(size).fill(null).map(() => Array(size).fill('water'));
+function generateConstrainedRandomLayout(size, shipsConfig, constraints) {
+    let grid = JSON.parse(JSON.stringify(constraints)); // Zaczynamy od siatki z ograniczeniami
     const shipsToPlace = shipsConfig.flatMap(s => Array(s.count).fill(s.size)).sort((a, b) => b - a);
+
+    // Najpierw przekształcamy 'hit' i 'sunk' na 'ship' dla logiki umieszczania
+    for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+            if (grid[y][x] === 'hit' || grid[y][x] === 'sunk' || grid[y][x] === 'damaged') {
+                grid[y][x] = 'ship_placed'; // Używamy specjalnego oznaczenia
+            }
+        }
+    }
 
     for (const shipSize of shipsToPlace) {
         let placed = false;
-        let placementAttempts = 0;
-        while (!placed && placementAttempts < 200) {
-            placementAttempts++;
+        let attempts = 0;
+        while (!placed && attempts < 200) {
+            attempts++;
             const isVertical = Math.random() < 0.5;
             const x = Math.floor(Math.random() * (isVertical ? size : size - shipSize + 1));
             const y = Math.floor(Math.random() * (isVertical ? size - shipSize + 1 : size));
 
-            if (canPlaceShip(grid, x, y, shipSize, isVertical)) {
+            if (canPlaceShipConstrained(grid, x, y, shipSize, isVertical)) {
                 for (let j = 0; j < shipSize; j++) {
                     const currentX = isVertical ? x : x + j;
                     const currentY = isVertical ? y + j : y;
-                    grid[currentY][currentX] = 'ship';
+                    if(grid[currentY][currentX] === 'unknown') grid[currentY][currentX] = 'ship';
                 }
                 placed = true;
             }
         }
-        if (!placed) return null; // Nie udało się umieścić statku, układ jest nieważny
+        if (!placed) return null;
     }
+
+    // Finalne czyszczenie siatki
+    for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+            if (grid[y][x] === 'ship_placed' || grid[y][x] === 'unknown') grid[y][x] = 'ship';
+            if (grid[y][x] === 'miss') grid[y][x] = 'water';
+        }
+    }
+
     return grid;
+}
+
+function canPlaceShipConstrained(grid, x, y, size, isVertical) {
+     // Ta funkcja musi respektować 'miss' i 'ship_placed', ale ignorować 'unknown'
+     for (let i = 0; i < size; i++) {
+        const currentX = isVertical ? x : x + i;
+        const currentY = isVertical ? y + i : y;
+
+        if (currentX >= grid.length || currentY >= grid.length || grid[currentY][currentX] === 'miss') {
+            return false;
+        }
+        // Sprawdź, czy nie koliduje z już umieszczonymi częściami innych statków
+        for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+                const checkX = currentX + dx;
+                const checkY = currentY + dy;
+                if (checkX >= 0 && checkX < grid.length && checkY >= 0 && checkY < grid.length) {
+                    if (grid[checkY][checkX] === 'ship') return false;
+                }
+            }
+        }
+    }
+    return true;
 }
 
 
@@ -1437,56 +1479,109 @@ function updatePossibleLayouts(shotX, shotY, result) {
 }
 
 /**
- * Asynchronicznie dogenerowuje i filtruje nowe hipotezy w tle.
+ * Zlicza statki o określonych rozmiarach w danym układzie.
+ * @param {Array<Array<string>>} layout - Siatka do analizy.
+ * @returns {object} - Obiekt z liczbą statków dla każdego rozmiaru (np. {5: 1, 4: 1, 3: 2}).
+ */
+function countShipsInLayout(layout) {
+    const size = layout.length;
+    const counts = {};
+    const visited = Array(size).fill(null).map(() => Array(size).fill(false));
+
+    for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+            if (layout[y][x] === 'ship' && !visited[y][x]) {
+                let shipSize = 1;
+                visited[y][x] = true;
+
+                // Sprawdź w prawo
+                let currentX = x + 1;
+                while (currentX < size && layout[y][currentX] === 'ship') {
+                    visited[y][currentX] = true;
+                    shipSize++;
+                    currentX++;
+                }
+
+                // Sprawdź w dół
+                let currentY = y + 1;
+                while (currentY < size && layout[currentY][x] === 'ship') {
+                    visited[currentY][x] = true;
+                    shipSize++;
+                    currentY++;
+                }
+
+                counts[shipSize] = (counts[shipSize] || 0) + 1;
+            }
+        }
+    }
+    return counts;
+}
+
+/**
+ * Asynchronicznie dogenerowuje i filtruje nowe hipotezy w tle z "Weryfikacją Kryptograficzną".
  */
 function regenerateHypothesesAsync() {
-    console.log("AI: Uruchomiono ciągłą regenerację hipotez w tle...");
+    console.log("AI: Uruchomiono regenerację z weryfikacją kryptograficzną...");
     showThinkingIndicator();
+
     const size = currentConfig.size;
     const shipsConfig = currentConfig.ships;
-    const regenerationChunk = 500;
+    const regenerationChunk = 250; // Mniejsze paczki dla bardziej złożonej logiki
     const targetAddition = 5000;
     let addedCount = 0;
 
-    function generateAndFilterChunk() {
+    // 1. Stwórz "Wzorzec Floty" na podstawie aktualnego stanu gry
+    const expectedShips = {};
+    opponentShips.forEach(s => {
+        if (s.count > 0) expectedShips[s.size] = s.count;
+    });
+
+    function generateAndVerifyChunk() {
         if (addedCount >= targetAddition) {
-            console.log(`AI: Zakończono regenerację. Dodano ${addedCount} nowych hipotez.`);
+            console.log(`AI: Zakończono regenerację. Dodano ${addedCount} czystych hipotez.`);
             hideThinkingIndicator();
             return;
         }
 
-        let newHypotheses = [];
-        for (let i = 0; i < regenerationChunk; i++) {
-            const newLayout = generateRandomValidLayout(size, shipsConfig);
+        let verifiedHypotheses = [];
+        let attempts = 0;
+        while (verifiedHypotheses.length < (regenerationChunk / 10) && attempts < regenerationChunk) {
+            attempts++;
+            // Użyj nowej, inteligentniejszej funkcji generującej
+            const newLayout = generateConstrainedRandomLayout(size, shipsConfig, opponentGrid);
+
             if (newLayout) {
-                // Natychmiastowa filtracja nowej hipotezy
-                let isValid = true;
-                for (let y = 0; y < size; y++) {
-                    for (let x = 0; x < size; x++) {
-                        const cellState = opponentGrid[y][x];
-                        if (cellState === 'miss' && newLayout[y][x] !== 'water') {
-                            isValid = false;
-                            break;
-                        }
-                        if ((cellState === 'hit' || cellState === 'damaged' || cellState === 'sunk') && newLayout[y][x] !== 'ship') {
-                            isValid = false;
+                // Krok 2: Weryfikacja Kompozycji Floty
+                const layoutShipCounts = countShipsInLayout(newLayout);
+                let compositionIsValid = true;
+
+                const expectedKeys = Object.keys(expectedShips);
+                const actualKeys = Object.keys(layoutShipCounts);
+
+                if (expectedKeys.length !== actualKeys.length) {
+                    compositionIsValid = false;
+                } else {
+                    for (const sizeKey of expectedKeys) {
+                        if (expectedShips[sizeKey] !== layoutShipCounts[sizeKey]) {
+                            compositionIsValid = false;
                             break;
                         }
                     }
-                    if (!isValid) break;
                 }
-                if (isValid) {
-                    newHypotheses.push(newLayout);
+
+                if (compositionIsValid) {
+                    verifiedHypotheses.push(newLayout);
                 }
             }
         }
 
-        allPossibleOpponentLayouts.push(...newHypotheses);
-        addedCount += newHypotheses.length;
+        allPossibleOpponentLayouts.push(...verifiedHypotheses);
+        addedCount += verifiedHypotheses.length;
 
-        setTimeout(generateAndFilterChunk, 0);
+        console.log(`Regeneracja: ${allPossibleOpponentLayouts.length} / docelowo ${10000 + targetAddition}`);
+        setTimeout(generateAndVerifyChunk, 0);
     }
-    generateAndFilterChunk();
+    generateAndVerifyChunk();
 }
 
 function updateAfterBotShot(result) {
