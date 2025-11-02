@@ -26,7 +26,6 @@ impl QuantumHunter {
         }
     }
 
-    // Konstruktor do testów, nie wykonuje ciężkich obliczeń
     pub fn new_empty(width: u8, height: u8) -> Self {
         Self {
             all_possible_layouts: Vec::new(),

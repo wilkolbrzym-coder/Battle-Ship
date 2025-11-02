@@ -27,21 +27,27 @@ function renderBoard(element, board, isPlayerBoard = false) {
 }
 
 async function startGame() {
-    await init();
-    gameEngine = JsGameEngine.new(10, 10, new Uint8Array(SHIP_LENGTHS));
-    gameEngine.start_ai_processing(); // Nowe wywołanie!
+    try {
+        await init();
 
-    const playerFleet = gameEngine.get_player_fleet_layout();
-    const jsBoard = [];
-    for (let i = 0; i < 10; i++) {
-        jsBoard.push(Array.from(playerFleet.slice(i * 10, (i + 1) * 10)));
+        gameEngine = JsGameEngine.new(10, 10, new Uint8Array(SHIP_LENGTHS));
+        gameEngine.start_ai_processing();
+
+        const playerFleet = gameEngine.get_player_fleet_layout();
+        const jsBoard = [];
+        for (let i = 0; i < 10; i++) {
+            jsBoard.push(Array.from(playerFleet.slice(i * 10, (i + 1) * 10)));
+        }
+
+        renderBoard(PLAYER_BOARD, jsBoard, true);
+        renderBoard(OPPONENT_BOARD, [], false);
+        log("Gra rozpoczęta. Twoja flota została rozstawiona przez Architekta Genetycznego.");
+
+        OPPONENT_BOARD.addEventListener('click', handleOpponentBoardClick);
+    } catch (err) {
+        console.error("Błąd podczas inicjalizacji WASM:", err);
+        log("Krytyczny błąd: Nie udało się załadować modułu AI.");
     }
-
-    renderBoard(PLAYER_BOARD, jsBoard, true);
-    renderBoard(OPPONENT_BOARD, [], false);
-    log("Gra rozpoczęta. Twoja flota została rozstawiona przez Architekta Genetycznego.");
-
-    OPPONENT_BOARD.addEventListener('click', handleOpponentBoardClick);
 }
 
 function handleOpponentBoardClick(event) {
@@ -55,9 +61,7 @@ function handleOpponentBoardClick(event) {
 
     event.target.classList.add(result);
 
-    // TODO: Pass shot to WASM when function is available
     // gameEngine.apply_player_shot(x, y, result);
-
     log(`Gracz strzelił w (${x}, ${y}) i wynik to: ${result}.`);
 
     setTimeout(() => botTurn(), 100);

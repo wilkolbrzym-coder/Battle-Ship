@@ -6,7 +6,5 @@ yarn-error.log
 # Rust
 target/
 
-# WASM build artifacts
-
 # Verification screenshots
 verification/

@@ -19,8 +19,8 @@ pub struct JsGameEngine {
 
 #[wasm_bindgen]
 impl JsGameEngine {
-    #[wasm_bindgen(constructor)]
     pub fn new(width: u8, height: u8, ship_lengths: Vec<u8>) -> Self {
+        console_error_panic_hook::set_once();
         Self {
             hunter: QuantumHunter::new_empty(width, height),
             player_board: vec![vec![0; width as usize]; height as usize],
