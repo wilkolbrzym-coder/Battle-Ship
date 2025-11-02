@@ -154,30 +154,11 @@ main {
     opacity: 0.7;
 }
 
-#opponent-board .cell {
-    position: relative;
-}
-
-#opponent-board .cell::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background-color: #89CFF0; /* Kolor wizualizacji */
-    opacity: var(--prob-opacity, 0);
-    transition: opacity 0.3s ease;
-    z-index: 1;
-    border-radius: 4px;
-}
-
-#opponent-board .cell.hit::before,
-#opponent-board .cell.miss::before,
-#opponent-board .cell.sunk::before,
-#opponent-board .cell.damaged::before {
-    opacity: 0 !important; /* Użyj !important, aby nadpisać styl bazowy */
-}
+#opponent-board .cell.suggestion-1 { background-color: rgba(155, 250, 255, 0.9); } /* Najlepsza sugestia - najbardziej nasycony */
+#opponent-board .cell.suggestion-2 { background-color: rgba(155, 250, 255, 0.75); }
+#opponent-board .cell.suggestion-3 { background-color: rgba(155, 250, 255, 0.6); }
+#opponent-board .cell.suggestion-4 { background-color: rgba(155, 250, 255, 0.45); }
+#opponent-board .cell.suggestion-5 { background-color: rgba(155, 250, 255, 0.3); } /* Najsłabsza z top 5 */
 
 
 .controls-container {
@@ -221,6 +202,40 @@ main {
 .action-buttons button:hover {
     background-color: var(--md-sys-color-primary);
     color: var(--md-sys-color-on-primary);
+}
+
+.player-shot-container {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    border: 1px solid var(--md-sys-color-outline);
+    padding: 1rem;
+    border-radius: 16px;
+}
+
+#player-shot-input {
+    background-color: var(--md-sys-color-surface);
+    color: var(--md-sys-color-on-surface);
+    border: 1px solid var(--md-sys-color-outline);
+    border-radius: 16px;
+    padding: 0.75rem;
+    font-size: 1rem;
+}
+
+#submit-player-shot-btn {
+    background-color: var(--md-sys-color-primary);
+    color: var(--md-sys-color-on-primary);
+    border: none;
+    padding: 0.75rem 1rem;
+    border-radius: 16px;
+    cursor: pointer;
+    font-size: 1rem;
+    transition: background-color 0.3s;
+}
+
+#submit-player-shot-btn:hover {
+    background-color: var(--md-sys-color-primary-container);
+    color: var(--md-sys-color-on-primary-container);
 }
 
 /* ##################################################################

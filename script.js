@@ -110,13 +110,7 @@ function handlePlayerBoardClick(event) {
         const ship = playerShips.find(s => s.id === cellState.shipId);
         ship.hits++;
 
-        let sunkBySpecialRule = false;
-        if (ship.size === 3 && ship.positions[1].x === x && ship.positions[1].y === y) {
-            ship.isSunk = true;
-            sunkBySpecialRule = true;
-        }
-
-        if (!sunkBySpecialRule && ship.hits === ship.size) {
+        if (ship.hits === ship.size) {
             ship.isSunk = true;
         }
 
@@ -166,205 +160,64 @@ let turnCounter = 1;
 
 
 // ##################################################################
-// #           RDZEŃ AI - PRZESZUKIWANIE DRZEWA MONTE CARLO         #
+// #           RDZEŃ AI - ŁOWCA KWANTOWY                            #
 // ##################################################################
 
-class GameState {
-    constructor(grid, ships, paranoid = false) {
-        this.grid = grid;
-        this.ships = ships;
-        this.paranoid = paranoid;
-    }
+let allPossibleOpponentLayouts = []; // Globalna tablica przechowująca "możliwe rzeczywistości"
 
-    getPossibleMoves() {
-        const probMap = calculateProbabilityMap(this.grid);
-        const moves = [];
-        for (let y = 0; y < this.grid.length; y++) {
-            for (let x = 0; x < this.grid.length; x++) {
-                if (this.grid[y][x] === 'unknown') {
-                    let weight = probMap[y][x];
-                    // Modyfikuj wagi na podstawie profilu przeciwnika
-                    if (opponentProfile.placementBias.edge > opponentProfile.placementBias.center && (x === 0 || x === this.grid.length - 1 || y === 0 || y === this.grid.length - 1)) {
-                        weight *= 1.2;
-                    }
-                    if (opponentProfile.placementBias.center > opponentProfile.placementBias.edge && (x > 0 && x < this.grid.length - 1 && y > 0 && y < this.grid.length - 1)) {
-                        weight *= 1.2;
-                    }
+/**
+ * Inicjalizuje Łowcę Kwantowego, generując początkowy zbiór możliwych układów planszy przeciwnika.
+ */
+function initializeQuantumHunter() {
+    console.log("AI: Inicjalizacja Silnika 'Możliwych Rzeczywistości'...");
+    const size = currentConfig.size;
+    const shipsConfig = currentConfig.ships;
+    const maxLayouts = 5000; // Ograniczenie, aby uniknąć problemów z wydajnością
 
-                    // Sprawdzenie orientacji jest bardziej złożone, wymaga analizy sąsiadów.
-                    // Na razie pominięte dla uproszczenia, ale dane są zbierane.
+    allPossibleOpponentLayouts = [];
+    let attempts = 0;
 
-                    moves.push({ x, y, weight });
-                }
-            }
+    while(allPossibleOpponentLayouts.length < maxLayouts && attempts < maxLayouts * 10) {
+        attempts++;
+        const newLayout = generateRandomValidLayout(size, shipsConfig);
+        if (newLayout) {
+            allPossibleOpponentLayouts.push(newLayout);
         }
-        // W trybie paranoicznym odwróć wagi
-        if(this.paranoid) return moves.sort((a, b) => a.weight - b.weight);
-        return moves.sort((a, b) => b.weight - a.weight);
     }
-
-    applyMove(move) {
-        // Ta uproszczona wersja nie zna wyniku, więc zakładamy 'miss' dla symulacji
-        this.grid[move.y][move.x] = 'miss';
-    }
-
-    rollout() {
-        const tempGrid = JSON.parse(JSON.stringify(this.grid));
-        const remainingShipsList = this.ships.flatMap(s => Array(s.count).fill(s.size));
-        const totalShipCells = remainingShipsList.reduce((acc, size) => acc + size, 0);
-        const unknownCells = tempGrid.flat().filter(cell => cell === 'unknown').length;
-
-        if (totalShipCells > unknownCells) return -1; // Stan niemożliwy, niska ocena
-
-        let simulatedHits = 0;
-        const rolloutDepth = Math.max(10, Math.floor(unknownCells * 0.3)); // Symuluj 30% pozostałych pól
-
-        for (let i = 0; i < rolloutDepth; i++) {
-            const probMap = this.calculateRolloutProbability(tempGrid, remainingShipsList);
-            let bestMove = { x: -1, y: -1, weight: -1 };
-
-            for (let y = 0; y < tempGrid.length; y++) {
-                for (let x = 0; x < tempGrid.length; x++) {
-                    if (tempGrid[y][x] === 'unknown' && probMap[y][x] > bestMove.weight) {
-                        bestMove = { x, y, weight: probMap[y][x] };
-                    }
-                }
-            }
-
-            if (bestMove.x === -1) break; // Brak możliwych ruchów
-
-            // Symulacja wyniku strzału na podstawie prawdopodobieństwa
-            const hitProbability = totalShipCells / unknownCells;
-            if (Math.random() < hitProbability) {
-                simulatedHits++;
-                tempGrid[bestMove.y][bestMove.x] = 'hit'; // Oznacz jako trafiony dla dalszej symulacji
-            } else {
-                tempGrid[bestMove.y][bestMove.x] = 'miss';
-            }
-        }
-
-        // Znormalizuj wynik do zakresu [-1, 1]
-        const score = (simulatedHits / rolloutDepth) * 2 - 1;
-        return isNaN(score) ? 0 : score;
-    }
-
-    // Uproszczona i szybsza wersja mapy prawdopodobieństwa na potrzeby symulacji
-    calculateRolloutProbability(grid, ships) {
-        const size = grid.length;
-        const probMap = Array(size).fill(null).map(() => Array(size).fill(0));
-        if(ships.length === 0) return probMap;
-        const smallestShip = Math.min(...ships);
-
-        for (const shipSize of ships) {
-             for (let y = 0; y < size; y++) {
-                for (let x = 0; x < size; x++) {
-                    if (x + shipSize <= size && this.canPlaceForRollout(grid, x, y, shipSize, false)) {
-                        for (let k = 0; k < shipSize; k++) probMap[y][x + k]++;
-                    }
-                    if (y + shipSize <= size && this.canPlaceForRollout(grid, x, y, shipSize, true)) {
-                        for (let k = 0; k < shipSize; k++) probMap[y + k][x]++;
-                    }
-                }
-            }
-        }
-         // Prosta wersja Parity
-        for (let y = 0; y < size; y++) {
-            for (let x = 0; x < size; x++) {
-                if ((x + y) % smallestShip !== 0) probMap[y][x] *= 0.5;
-            }
-        }
-        return probMap;
-    }
-
-    canPlaceForRollout(grid, x, y, size, isVertical) {
-        for (let i = 0; i < size; i++) {
-            const currentX = isVertical ? x : x + i;
-            const currentY = isVertical ? y + i : y;
-             if (grid[currentY][currentX] === 'miss' || grid[currentY][currentX] === 'sunk') {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    clone() {
-        return new GameState(JSON.parse(JSON.stringify(this.grid)), JSON.parse(JSON.stringify(this.ships)));
-    }
+    console.log(`AI: Wygenerowano ${allPossibleOpponentLayouts.length} możliwych rzeczywistości. Gotów do polowania.`);
 }
 
-class MCTSNode {
-    constructor(state, parent = null, move = null) {
-        this.state = state; // Stan gry (np. opponentGrid)
-        this.parent = parent;
-        this.move = move; // Ruch, który doprowadził do tego stanu
-        this.children = [];
-        this.wins = 0;
-        this.visits = 0;
-        this.untriedMoves = null; // Leniwe inicjowanie ruchów
-    }
+/**
+ * Generuje pojedynczy, losowy, ale w pełni prawidłowy układ statków.
+ * @param {number} size - Rozmiar planszy.
+ * @param {Array<object>} shipsConfig - Konfiguracja statków.
+ * @returns {Array<Array<string>>|null} - Siatka z układem lub null, jeśli się nie udało.
+ */
+function generateRandomValidLayout(size, shipsConfig) {
+    const grid = Array(size).fill(null).map(() => Array(size).fill('water'));
+    const shipsToPlace = shipsConfig.flatMap(s => Array(s.count).fill(s.size)).sort((a, b) => b - a);
 
-    getUntriedMoves() {
-        if (this.untriedMoves === null) {
-            // Logika generowania możliwych ruchów z danego stanu
-            this.untriedMoves = this.state.getPossibleMoves();
-        }
-        return this.untriedMoves;
-    }
+    for (const shipSize of shipsToPlace) {
+        let placed = false;
+        let placementAttempts = 0;
+        while (!placed && placementAttempts < 200) {
+            placementAttempts++;
+            const isVertical = Math.random() < 0.5;
+            const x = Math.floor(Math.random() * (isVertical ? size : size - shipSize + 1));
+            const y = Math.floor(Math.random() * (isVertical ? size - shipSize + 1 : size));
 
-    selectChildUCB1() {
-        const C = Math.sqrt(2); // Parametr eksploracji
-        let bestScore = -Infinity;
-        let bestChild = null;
-
-        for (const child of this.children) {
-            const exploit = child.wins / child.visits;
-            const explore = C * Math.sqrt(Math.log(this.visits) / child.visits);
-            const score = exploit + explore;
-            if (score > bestScore) {
-                bestScore = score;
-                bestChild = child;
+            if (canPlaceShip(grid, x, y, shipSize, isVertical)) {
+                for (let j = 0; j < shipSize; j++) {
+                    const currentX = isVertical ? x : x + j;
+                    const currentY = isVertical ? y + j : y;
+                    grid[currentY][currentX] = 'ship';
+                }
+                placed = true;
             }
         }
-        return bestChild;
+        if (!placed) return null; // Nie udało się umieścić statku, układ jest nieważny
     }
-}
-
-function runMCTS(currentState, timeout = 20000) {
-    const root = new MCTSNode(currentState);
-    const startTime = performance.now();
-
-    while (performance.now() - startTime < timeout) {
-        let node = root;
-        let tempState = currentState.clone();
-
-        // 1. Selekcja (z UCB1)
-        while (node.getUntriedMoves().length === 0 && node.children.length > 0) {
-            node = node.selectChildUCB1();
-            tempState.applyMove(node.move);
-        }
-
-        // 2. Ekspansja
-        if (node.getUntriedMoves().length > 0) {
-            const move = node.getUntriedMoves().pop();
-            tempState.applyMove(move);
-            const newNode = new MCTSNode(tempState, node, move);
-            node.children.push(newNode);
-            node = newNode;
-        }
-
-        // 3. Symulacja
-        const result = tempState.rollout();
-
-        // 4. Propagacja wsteczna
-        while (node !== null) {
-            node.visits++;
-            node.wins += result;
-            node = node.parent;
-        }
-    }
-
-    // Wybierz najlepszy ruch (najczęściej odwiedzany)
-    return root.children.sort((a, b) => b.visits - a.visits)[0].move;
+    return grid;
 }
 
 
@@ -412,17 +265,64 @@ function calculateProbabilityMap(grid) {
         }
     }
 
-    // Zastosuj strategię Parity
-    for (let y = 0; y < size; y++) {
-        for (let x = 0; x < size; x++) {
-            // Strzelaj w pola, które pasują do "szachownicy" najmniejszego statku
-            if ((x + y) % smallestShipSize !== 0) {
-                finalProbMap[y][x] = 0;
+    // Dynamiczna Analiza Parzystości
+    const dynamicSmallestShip = Math.min(...opponentShips.filter(s => s.count > 0).map(s => s.size));
+    if (dynamicSmallestShip && dynamicSmallestShip !== Infinity) {
+        for (let y = 0; y < size; y++) {
+            for (let x = 0; x < size; x++) {
+                // Strzelaj w pola, które pasują do "szachownicy" NAJMNIEJSZEGO POZOSTAŁEGO statku
+                if ((x + y) % dynamicSmallestShip !== 0) {
+                    finalProbMap[y][x] *= 0.1; // Zamiast zerować, mocno redukuj wagę
+                }
             }
         }
     }
 
     return finalProbMap;
+}
+
+/**
+ * Oblicza mapę Wartości Informacji (Value of Information).
+ * Komórki, które dają więcej informacji (np. wykluczają więcej możliwych położeń statków),
+ * otrzymują wyższy wynik.
+ * @param {Array<Array<number>>} probMap - Mapa prawdopodobieństwa.
+ * @param {Array<Array<string>>} grid - Siatka gry.
+ * @returns {Array<Array<number>>} - Mapa z wartościami VoI.
+ */
+function calculateVoIMap(probMap, grid) {
+    const size = grid.length;
+    const voiMap = Array(size).fill(null).map(() => Array(size).fill(0));
+    const remainingShips = opponentShips.filter(s => s.count > 0);
+    if (remainingShips.length === 0) return voiMap;
+
+    for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+            if (grid[y][x] === 'unknown') {
+                // Podstawowym czynnikiem jest prawdopodobieństwo
+                let informationValue = probMap[y][x];
+
+                // Dodatkowy bonus za "przecinanie" możliwych długich statków
+                for (const shipType of remainingShips) {
+                    const shipSize = shipType.size;
+                    // Sprawdź, ile potencjalnych umiejscowień statków "przechodzi" przez to pole
+                    // Poziomo
+                    for (let i = 0; i < shipSize; i++) {
+                        if (canPlaceShipForProbability(grid, x - i, y, shipSize, false)) {
+                            informationValue += 1;
+                        }
+                    }
+                    // Pionowo
+                    for (let i = 0; i < shipSize; i++) {
+                        if (canPlaceShipForProbability(grid, x, y - i, shipSize, true)) {
+                            informationValue += 1;
+                        }
+                    }
+                }
+                voiMap[y][x] = informationValue;
+            }
+        }
+    }
+    return voiMap;
 }
 
 /**
@@ -475,6 +375,7 @@ let playerGrid; // Tablica 2D dla statków gracza/bota
 let playerShips = []; // Lista obiektów statków gracza
 let opponentGrid; // Tablica 2D dla planszy przeciwnika
 let opponentShips; // Lista statków przeciwnika do zatopienia
+let history = []; // Historia stanów gry do cofania ruchów
 
 /**
  * Inicjalizuje puste siatki gry.
@@ -573,33 +474,123 @@ function createRandomIndividual(grid, shipsConfig) {
     return individual;
 }
 
-// Ocenia jakość osobnika
+// Ocenia jakość osobnika ("Wielki Architekt Pola Bitwy")
 function calculateFitness(individual, size) {
-    let totalDistance = 0;
-    let shipCenters = individual.map(ship => {
-        const x = ship.positions.reduce((sum, pos) => sum + pos.x, 0) / ship.size;
-        const y = ship.positions.reduce((sum, pos) => sum + pos.y, 0) / ship.size;
-        return { x, y };
-    });
+    if (individual.length === 0) return -Infinity; // Kara za niekompletne układy
 
-    if (shipCenters.length < 2) return 100;
+    const parityResistanceScore = calculateParityResistance(individual, size);
+    const ambiguityScore = calculateAmbiguity(individual, size);
+    const balanceScore = calculateBalance(individual, size);
 
-    for (let i = 0; i < shipCenters.length; i++) {
-        for (let j = i + 1; j < shipCenters.length; j++) {
-            totalDistance += Math.hypot(shipCenters[i].x - shipCenters[j].x, shipCenters[i].y - shipCenters[j].y);
+    // Nadaj wagi poszczególnym kryteriom, aby ustalić priorytety strategiczne
+    const finalScore = (parityResistanceScore * 0.4) + (ambiguityScore * 0.4) + (balanceScore * 0.2);
+
+    return finalScore;
+}
+
+/**
+ * Oblicza odporność układu na atak strategią parzystości.
+ * @param {Array<object>} individual - Układ statków.
+ * @param {number} size - Rozmiar planszy.
+ * @returns {number} - Wynik odporności.
+ */
+function calculateParityResistance(individual, size) {
+    const grid = Array(size).fill(null).map(() => Array(size).fill('water'));
+    individual.forEach(ship => ship.positions.forEach(pos => grid[pos.y][pos.x] = 'ship'));
+
+    let shotsNeeded = 0;
+    const parity = 2; // Najbardziej uniwersalny i powszechny przypadek ataku
+    const hitShips = new Set();
+
+    for (let p = 0; p < parity; p++) {
+        for (let y = 0; y < size; y++) {
+            for (let x = 0; x < size; x++) {
+                if ((x + y) % parity === p) {
+                    shotsNeeded++;
+                    if (grid[y][x] === 'ship') {
+                        // Znajdź statek, który został trafiony
+                        const hitShip = individual.find(ship => ship.positions.some(pos => pos.x === x && pos.y === y));
+                        if (hitShip) {
+                            hitShips.add(hitShip);
+                        }
+                    }
+                    if (hitShips.size === individual.length) {
+                        // Znormalizuj wynik: im więcej strzałów, tym lepiej.
+                        return shotsNeeded / (size * size);
+                    }
+                }
+            }
         }
     }
+    // Jeśli z jakiegoś powodu nie wszystkie statki zostały trafione (co nie powinno się zdarzyć)
+    return shotsNeeded / (size * size);
+}
 
-    const edgePenalty = individual.flat().reduce((penalty, ship) => {
+/**
+ * Oblicza, jak bardzo niejednoznaczny i "mylący" jest układ.
+ * @param {Array<object>} individual - Układ statków.
+ * @param {number} size - Rozmiar planszy.
+ * @returns {number} - Wynik niejednoznaczności.
+ */
+function calculateAmbiguity(individual, size) {
+    let touchPoints = 0;
+    const grid = Array(size).fill(null).map(() => Array(size).fill(false));
+    individual.forEach(ship => ship.positions.forEach(pos => grid[pos.y][pos.x] = true));
+
+    individual.forEach(ship => {
         ship.positions.forEach(pos => {
-            if (pos.x === 0 || pos.x === size - 1 || pos.y === 0 || pos.y === size - 1) {
-                penalty += 0.5;
+            // Sprawdź sąsiadów w odległości 2 pól (szukamy bliskich, ale nie dotykających się statków)
+            for (let dy = -2; dy <= 2; dy++) {
+                for (let dx = -2; dx <= 2; dx++) {
+                    if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1) continue; // Pomiń bezpośrednich sąsiadów
+
+                    const checkX = pos.x + dx;
+                    const checkY = pos.y + dy;
+
+                    if (checkX >= 0 && checkX < size && checkY >= 0 && checkY < size && grid[checkY][checkX]) {
+                        touchPoints++;
+                    }
+                }
             }
         });
-        return penalty;
-    }, 0);
+    });
 
-    return totalDistance / (shipCenters.length * (shipCenters.length - 1) / 2) - edgePenalty;
+    // Normalizuj wynik - im więcej "bliskich kontaktów", tym lepiej
+    const totalPossibleTouchPoints = individual.reduce((acc, ship) => acc + ship.size, 0) * 16; // 16 to liczba pól w "otoczce" 5x5 minus 9 w centrum
+    return touchPoints / totalPossibleTouchPoints;
+}
+
+/**
+ * Oblicza strategiczną równowagę układu na planszy.
+ * @param {Array<object>} individual - Układ statków.
+ * @param {number} size - Rozmiar planszy.
+ * @returns {number} - Wynik równowagi.
+ */
+function calculateBalance(individual, size) {
+    const allPositions = individual.flatMap(ship => ship.positions);
+    if (allPositions.length === 0) return 0;
+
+    const centerX = (size - 1) / 2;
+    const centerY = (size - 1) / 2;
+
+    // Oblicz środek ciężkości floty
+    const fleetCenterX = allPositions.reduce((acc, pos) => acc + pos.x, 0) / allPositions.length;
+    const fleetCenterY = allPositions.reduce((acc, pos) => acc + pos.y, 0) / allPositions.length;
+
+    // Oblicz, jak blisko środek ciężkości floty jest do idealnego centrum planszy
+    const centerProximity = 1 - (Math.hypot(fleetCenterX - centerX, fleetCenterY - centerY) / Math.hypot(centerX, centerY));
+
+    // Oblicz wariancję odległości statków od środka ciężkości floty (jak bardzo są rozproszone)
+    const distances = allPositions.map(pos => Math.hypot(pos.x - fleetCenterX, pos.y - fleetCenterY));
+    const meanDistance = distances.reduce((acc, d) => acc + d, 0) / distances.length;
+    const variance = distances.reduce((acc, d) => acc + Math.pow(d - meanDistance, 2), 0) / distances.length;
+
+    // Chcemy dużej wariancji (rozproszenia) i bliskości do centrum.
+    // Normalizuj wariancję. Max wariancja to odległość rogu od centrum, czyli (size/2)^2.
+    const maxVariance = Math.pow(size / 2, 2);
+    const normalizedVariance = variance / maxVariance;
+
+    return (centerProximity * 0.3) + (normalizedVariance * 0.7);
 }
 
 
@@ -792,19 +783,14 @@ function renderBoard(boardId, grid) {
     const cells = boardElement.childNodes;
     const size = grid.length;
 
-    let probabilityMap = null;
-    if (boardId === 'opponent-board') {
-        probabilityMap = calculateProbabilityMap(grid);
-    }
-    const maxProb = probabilityMap ? Math.max(...probabilityMap.flat()) : 0;
-
     for (let y = 0; y < size; y++) {
         for (let x = 0; x < size; x++) {
             const index = y * size + x;
             const cellState = grid[y][x];
             const cellElement = cells[index];
-            cellElement.className = 'cell'; // Reset klas
-            cellElement.style.setProperty('--prob-opacity', 0); // Reset stylu
+
+            // Czyszczenie starych klas sugestii
+            cellElement.className = 'cell';
 
             if (boardId === 'player-board') {
                 if (typeof cellState === 'object' && cellState !== null) {
@@ -816,10 +802,6 @@ function renderBoard(boardId, grid) {
             } else if (boardId === 'opponent-board') {
                 if (cellState !== 'unknown') {
                     cellElement.classList.add(cellState);
-                } else if (probabilityMap && maxProb > 0) {
-                    const prob = probabilityMap[y][x];
-                    const opacity = (prob / maxProb) * 0.7; // Skaluj przezroczystość
-                    cellElement.style.setProperty('--prob-opacity', opacity);
                 }
             }
         }
@@ -991,6 +973,101 @@ function findGuaranteedHit() {
     return null;
 }
 
+// ##################################################################
+// #      ARCHIMISTRZ AI - SAMODOSTOSOWUJĄCY SIĘ KONTROLER TAKTYCZNY #
+// ##################################################################
+
+class TacticalController {
+    constructor() {
+        this.currentMode = 'BALANCED'; // 'AGGRESSIVE', 'BALANCED', 'CAUTIOUS'
+        this.recentShotHistory = []; // Przechowuje wyniki ostatnich N strzałów (true for hit, false for miss)
+        this.HISTORY_LENGTH = 10;
+    }
+
+    /**
+     * Analizuje stan gry i decyduje o trybie taktycznym.
+     * @param {object} gameState - Obiekt zawierający informacje o stanie gry.
+     *                          { playerShipsLeft: number, opponentShipsLeft: number,
+     *                            totalPlayerShips: number, totalOpponentShips: number }
+     */
+    updateAndDecide(gameState) {
+        const playerShipsLeftRatio = gameState.playerShipsLeft / gameState.totalPlayerShips;
+        const opponentShipsLeftRatio = gameState.opponentShipsLeft / gameState.totalOpponentShips;
+        const advantage = playerShipsLeftRatio - opponentShipsLeftRatio;
+        const hitRate = this.recentShotHistory.filter(Boolean).length / this.recentShotHistory.length;
+
+        let previousMode = this.currentMode;
+
+        if (advantage > 0.25 || (hitRate > 0.6 && this.recentShotHistory.length === this.HISTORY_LENGTH)) {
+            this.currentMode = 'AGGRESSIVE';
+        } else if (advantage < -0.25 || (hitRate < 0.2 && this.recentShotHistory.length === this.HISTORY_LENGTH)) {
+            this.currentMode = 'CAUTIOUS';
+        } else {
+            this.currentMode = 'BALANCED';
+        }
+
+        if (previousMode !== this.currentMode) {
+            console.log(`Kontroler Taktyczny: Zmiana trybu z ${previousMode} na ${this.currentMode}. Przewaga: ${(advantage * 100).toFixed(0)}%, Skuteczność: ${(hitRate * 100).toFixed(0)}%`);
+        }
+    }
+
+    /**
+     * Rejestruje wynik ostatniego strzału.
+     * @param {boolean} wasHit - True, jeśli strzał był celny.
+     */
+    recordShot(wasHit) {
+        this.recentShotHistory.push(wasHit);
+        if (this.recentShotHistory.length > this.HISTORY_LENGTH) {
+            this.recentShotHistory.shift();
+        }
+    }
+
+    /**
+     * Zwraca parametry dla algorytmu MCTS na podstawie aktualnego trybu.
+     * @returns {{timeout: number, isParanoid: boolean}}
+     */
+    getMctsParameters() {
+        switch (this.currentMode) {
+            case 'AGGRESSIVE':
+                // Szybsze decyzje, mniejsza ostrożność
+                return { timeout: 10000, isParanoid: false };
+            case 'CAUTIOUS':
+                // Dłuższy namysł, wysoka ostrożność
+                return { timeout: 25000, isParanoid: true };
+            case 'BALANCED':
+            default:
+                // Domyślny, zbalansowany czas
+                return { timeout: 20000, isParanoid: false };
+        }
+    }
+}
+
+const tacticalController = new TacticalController();
+
+// ##################################################################
+// #      ARCHIMISTRZ AI - MODUŁ KOREKCJI BŁĘDÓW                     #
+// ##################################################################
+
+class ErrorCorrection {
+    /**
+     * Weryfikuje, czy zatopienie statku o podanym rozmiarze jest zgodne z aktualną wiedzą o flocie przeciwnika.
+     * @param {number} sunkShipSize - Rozmiar zatopionego statku.
+     * @param {Array<object>} knownOpponentShips - Lista pozostałych statków przeciwnika.
+     * @returns {{error: boolean, message: string|null}}
+     */
+    verifySunkShip(sunkShipSize, knownOpponentShips) {
+        const shipType = knownOpponentShips.find(s => s.size === sunkShipSize);
+        if (!shipType || shipType.count === 0) {
+            const message = `BŁĄD KRYTYCZNY: Zgłoszono zatopienie statku o rozmiarze ${sunkShipSize}, ale według mojej wiedzy nie ma już takich jednostek! Sprawdź swoje zapiski. Możesz cofnąć ostatni ruch, aby skorygować stan gry.`;
+            return { error: true, message: message };
+        }
+        return { error: false, message: null };
+    }
+}
+
+const errorCorrector = new ErrorCorrection();
+
+
 /**
  * Główna funkcja tury bota - decyduje gdzie strzelić.
  */
@@ -1008,27 +1085,58 @@ function botTurn() {
         y = choice.y;
         isFirstShot = false;
     } else if (botState === 'HUNT') {
-
         const guaranteedHit = findGuaranteedHit();
         if (guaranteedHit) {
             console.log("AI dedukuje: GWARANTOWANE trafienie!");
             x = guaranteedHit.x;
             y = guaranteedHit.y;
         } else {
-            const remainingShipsTotal = opponentShips.reduce((acc, s) => acc + s.count, 0);
-            const smallestShipLeft = Math.min(...opponentShips.filter(s => s.count > 0).map(s => s.size));
-            const isParanoid = remainingShipsTotal <= 2 && smallestShipLeft <= 2;
+            console.log(`AI: Rozpoczynam analizę ${allPossibleOpponentLayouts.length} możliwych rzeczywistości...`);
+            let bestMove = { x: -1, y: -1, score: -Infinity };
+            const unknownCells = [];
+            for(let r=0; r<size; r++) for(let c=0; c<size; c++) if(opponentGrid[r][c] === 'unknown') unknownCells.push({x:c, y:r});
 
-            let timeout = 1000 + (remainingShipsTotal * 250);
-            if (timeout > 20000) timeout = 20000;
-            console.log(`AI: Dynamiczny czas analizy: ${timeout}ms. Tryb 'Kontr-Strategii': ${isParanoid}`);
+            // "Tryb Egzekutora"
+            const dynamicSmallestShip = Math.min(...opponentShips.filter(s => s.count > 0).map(s => s.size));
+            if (dynamicSmallestShip <= 2 && unknownCells.length > (size*size*0.5)) {
+                 console.log("AI: Aktywacja Trybu Egzekutora opartego na parzystości.");
+                 const parityMoves = unknownCells.filter(cell => (cell.x + cell.y) % dynamicSmallestShip === 0);
+                 if (parityMoves.length > 0) {
+                     const randomCell = parityMoves[Math.floor(Math.random() * parityMoves.length)];
+                     x = randomCell.x;
+                     y = randomCell.y;
+                     // Pomiń resztę skomplikowanej analizy
+                     lastShot = { x, y };
+                     const coordString = `${String.fromCharCode(65 + y)}${x + 1}`;
+                     document.getElementById('bot-suggestion').textContent = coordString;
+                     console.log(`Bot (Egzekutor) sugeruje strzał w: (${x}, ${y})`);
+                     return;
+                 }
+            }
 
-            const currentState = new GameState(opponentGrid, opponentShips, isParanoid);
-            const bestMove = runMCTS(currentState, timeout);
-            x = bestMove.x;
-            y = bestMove.y;
+            for (const cell of unknownCells) {
+                const layoutsWithShipAtCell = allPossibleOpponentLayouts.filter(layout => layout[cell.y][cell.x] === 'ship').length;
+                const layoutsWithoutShipAtCell = allPossibleOpponentLayouts.length - layoutsWithShipAtCell;
+
+                // Strategia minimaksowa: wybierz ruch, który jest najlepszy w najgorszym przypadku
+                const score = Math.min(layoutsWithShipAtCell, layoutsWithoutShipAtCell);
+
+                if (score > bestMove.score) {
+                    bestMove = { x: cell.x, y: cell.y, score: score };
+                }
+            }
+
+            if(bestMove.x !== -1) {
+                x = bestMove.x;
+                y = bestMove.y;
+                 console.log(`AI: Najlepszy ruch redukuje niepewność o co najmniej ${bestMove.score} rzeczywistości.`);
+            } else {
+                // Sytuacja awaryjna
+                 const randomCell = unknownCells[Math.floor(Math.random() * unknownCells.length)];
+                 x = randomCell.x;
+                 y = randomCell.y;
+            }
         }
-
     } else { // botState === 'TARGET'
         generateTargetQueue();
         if (targetQueue.length > 0) {
@@ -1054,9 +1162,32 @@ function botTurn() {
  * Aktualizuje stan gry po strzale bota na podstawie odpowiedzi gracza.
  * @param {string} result - Wynik strzału ('Pudło', 'Trafiony', 'Uszkodzony', 'Zatopiony').
  */
+function updatePossibleLayouts(shotX, shotY, result) {
+    const previousCount = allPossibleOpponentLayouts.length;
+    if (result === 'Pudło') {
+        allPossibleOpponentLayouts = allPossibleOpponentLayouts.filter(layout => layout[shotY][shotX] === 'water');
+    } else { // Trafiony, Uszkodzony, Zatopiony
+        allPossibleOpponentLayouts = allPossibleOpponentLayouts.filter(layout => layout[shotY][shotX] === 'ship');
+    }
+    console.log(`AI: Redukcja rzeczywistości. Pozostało ${allPossibleOpponentLayouts.length} z ${previousCount}.`);
+}
+
 function updateAfterBotShot(result) {
     if (!lastShot) return;
+
+    // Zapisz aktualny stan przed modyfikacją
+    history.push(JSON.parse(JSON.stringify({
+        grid: opponentGrid,
+        ships: opponentShips,
+        botState: botState,
+        currentTargetHits: currentTargetHits,
+        lastShot: lastShot
+    })));
+
     const { x, y } = lastShot;
+
+    // Zaktualizuj "pamięć" bota o nową informację
+    updatePossibleLayouts(x, y, result);
 
     const cellElement = document.querySelector(`#opponent-board .cell[data-x='${x}'][data-y='${y}']`);
 
@@ -1065,6 +1196,7 @@ function updateAfterBotShot(result) {
             opponentGrid[y][x] = 'miss';
             triggerAnimation(cellElement, 'animate-miss', 400);
             cellElement.classList.add('miss');
+            tacticalController.recordShot(false);
             break;
         case 'Trafiony':
         case 'Uszkodzony':
@@ -1073,12 +1205,14 @@ function updateAfterBotShot(result) {
             cellElement.classList.add(result === 'Trafiony' ? 'hit' : 'damaged');
             botState = 'TARGET';
             currentTargetHits.push({ x, y });
+            tacticalController.recordShot(true);
             break;
         case 'Zatopiony':
             opponentGrid[y][x] = 'hit'; // Najpierw oznacz jako trafienie dla animacji
             triggerAnimation(cellElement, 'animate-hit', 500);
 
             currentTargetHits.push({ x, y });
+            tacticalController.recordShot(true);
 
             // Zidentyfikuj statek PRZED oznaczeniem go jako zatopiony
             const shipCoords = identifyAndGetSunkShipCoords(x,y);
@@ -1100,22 +1234,27 @@ function updateAfterBotShot(result) {
 
 
             // Reset stanu bota
+            const verification = errorCorrector.verifySunkShip(shipCoords.length, opponentShips);
+            if (verification.error) {
+                alert(verification.message);
+                // Cofnij operację: oznacz tylko jako trafione, nie zatopione
+                shipCoords.forEach(part => {
+                    const cellEl = document.querySelector(`#opponent-board .cell[data-x='${part.x}'][data-y='${part.y}']`);
+                    if (cellEl) cellEl.classList.add('hit');
+                    opponentGrid[part.y][part.x] = 'hit';
+                });
+                botState = 'TARGET'; // Wróć do trybu dobijania, bo coś jest nie tak
+                return; // Przerwij dalsze przetwarzanie
+            }
+
+            // Kontynuuj, jeśli weryfikacja przebiegła pomyślnie
+            const shipIndex = opponentShips.findIndex(s => s.size === shipCoords.length);
+            opponentShips[shipIndex].count--;
+            updateOpponentProfile({ size: shipCoords.length, positions: shipCoords });
+            checkWinCondition();
+
             botState = 'HUNT';
             targetQueue = [];
-
-            const identificationSuccess = opponentShips.some(s => s.size === shipCoords.length && s.count > 0);
-
-            if (identificationSuccess) {
-                 const shipIndex = opponentShips.findIndex(s => s.size === shipCoords.length && s.count > 0);
-                 opponentShips[shipIndex].count--;
-                 updateOpponentProfile({ size: shipCoords.length, positions: shipCoords });
-                 checkWinCondition();
-            } else {
-                 alert(`Błąd: Zgłoszono zatopienie, ale nie ma już dostępnych statków o rozmiarze ${shipCoords.length}! Sprawdź planszę przeciwnika.`);
-                 shipCoords.forEach(part => opponentGrid[part.y][part.x] = 'hit');
-                 botState = 'TARGET';
-                 return;
-            }
             currentTargetHits = []; // Wyczyść dopiero po całej operacji
             break;
     }
@@ -1287,6 +1426,7 @@ function startGame(sizeConfig) {
 
     // Inicjalizacja logicznej reprezentacji plansz
     initializeGrids(currentConfig.size);
+    initializeQuantumHunter(); // Inicjalizacja nowego systemu ataku
     placeShipsRandomly(playerGrid, currentConfig.ships);
 
     // Renderowanie stanu początkowego
@@ -1341,6 +1481,23 @@ document.addEventListener('DOMContentLoaded', () => {
         location.reload();
     });
 
+    document.getElementById('submit-player-shot-btn').addEventListener('click', handlePlayerOverrideShot);
+
+    document.getElementById('btn-undo').addEventListener('click', () => {
+        if (history.length > 0) {
+            const lastState = history.pop();
+            opponentGrid = lastState.grid;
+            opponentShips = lastState.ships;
+            botState = lastState.botState;
+            currentTargetHits = lastState.currentTargetHits;
+            lastShot = lastState.lastShot;
+            renderBoard('opponent-board', opponentGrid);
+            console.log("Cofnięto ostatni ruch.");
+        } else {
+            alert("Brak ruchów do cofnięcia.");
+        }
+    });
+
     const shotInput = document.getElementById('shot-input');
     const submitShotBtn = document.getElementById('submit-shot-btn');
 
@@ -1370,4 +1527,45 @@ document.addEventListener('DOMContentLoaded', () => {
             handleSubmitShot();
         }
     });
+
+    document.getElementById('player-shot-input').addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+            handlePlayerOverrideShot();
+        }
+    });
 });
+
+function handlePlayerOverrideShot() {
+    const inputElement = document.getElementById('player-shot-input');
+    const value = inputElement.value.trim().toUpperCase();
+    if (!value) return;
+
+    const letter = value.charAt(0);
+    const number = parseInt(value.substring(1), 10);
+
+    if (letter >= 'A' && letter <= String.fromCharCode(65 + currentConfig.size - 1) && number >= 1 && number <= currentConfig.size) {
+        const y = letter.charCodeAt(0) - 65;
+        const x = number - 1;
+
+        if (opponentGrid[y][x] !== 'unknown') {
+            alert("To pole było już ostrzelane! Wybierz inne.");
+            return;
+        }
+
+        // Gracz przejmuje inicjatywę
+        lastShot = { x, y };
+        document.getElementById('bot-suggestion').textContent = `${value} (Twój wybór)`;
+        clearPreviousSuggestions();
+
+        // Podświetl wybór gracza
+        const cellElement = document.querySelector(`#opponent-board .cell[data-x='${x}'][data-y='${y}']`);
+        if (cellElement) {
+            cellElement.classList.add('suggestion-1'); // Użyj stylu najlepszej sugestii
+        }
+
+        console.log(`Gracz przejmuje kontrolę, strzelając w: (${x}, ${y})`);
+        inputElement.value = ''; // Wyczyść pole po strzale
+    } else {
+        alert("Nieprawidłowe koordynaty. Wpisz np. 'A5'.");
+    }
+}
