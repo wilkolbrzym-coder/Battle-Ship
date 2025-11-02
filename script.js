@@ -180,6 +180,46 @@ function hideThinkingIndicator() {
 }
 
 /**
+ * Generuje pojedynczy, losowy, ale w pełni prawidłowy układ statków.
+ * Jest to kluczowa funkcja dla silnika 'Możliwych Rzeczywistości',
+ * która tworzy hipotezy do analizy przez AI.
+ * @param {number} size - Rozmiar planszy.
+ * @param {Array<object>} shipsConfig - Konfiguracja statków do umieszczenia.
+ * @returns {Array<Array<string>>|null} Zwraca siatkę 2D z umieszczonymi statkami lub null w przypadku niepowodzenia.
+ */
+function generateRandomValidLayout(size, shipsConfig) {
+    let grid = Array(size).fill(null).map(() => Array(size).fill('water'));
+    const shipsToPlace = shipsConfig.flatMap(s => Array(s.count).fill(s.size)).sort((a, b) => b - a);
+
+    for (const shipSize of shipsToPlace) {
+        let placed = false;
+        let attempts = 0;
+        while (!placed && attempts < 200) { // Limit prób, aby uniknąć nieskończonej pętli
+            attempts++;
+            const isVertical = Math.random() < 0.5;
+            const x = Math.floor(Math.random() * (isVertical ? size : size - shipSize + 1));
+            const y = Math.floor(Math.random() * (isVertical ? size - shipSize + 1 : size));
+
+            // Używamy istniejącej funkcji `canPlaceShip`, ale na siatce, którą budujemy
+            if (canPlaceShip(grid, x, y, shipSize, isVertical)) {
+                for (let j = 0; j < shipSize; j++) {
+                    const currentX = isVertical ? x : x + j;
+                    const currentY = isVertical ? y + j : y;
+                    grid[currentY][currentX] = 'ship';
+                }
+                placed = true;
+            }
+        }
+        if (!placed) {
+            // Jeśli nie uda się umieścić statku, całe rozmieszczenie jest nieważne
+            return null;
+        }
+    }
+    return grid;
+}
+
+
+/**
  * Inicjalizuje Łowcę Kwantowego, generując asynchronicznie początkowy zbiór możliwych układów.
  */
 function initializeQuantumHunter() {
