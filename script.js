@@ -228,7 +228,7 @@ function initializeQuantumHunter() {
     allPossibleOpponentLayouts = [];
     const size = currentConfig.size;
     const shipsConfig = currentConfig.ships;
-    const targetLayouts = 50000;
+    const targetLayouts = 20000;
     const chunkSize = 500; // Liczba układów generowanych w jednym "kawałku" czasu
 
     function generateChunk() {
@@ -1431,8 +1431,9 @@ function botTurn() {
  */
 function globalConstraintSolver() {
     const size = currentConfig.size;
-    const remainingShipSizes = opponentShips.flatMap(s => Array(s.count).fill(s.size));
-    if (remainingShipSizes.length === 0) return;
+    // Optymalizacja: Pobierz tylko unikalne rozmiary pozostałych statków, aby uniknąć zbędnych powtórzeń.
+    const uniqueRemainingShipSizes = [...new Set(opponentShips.filter(s => s.count > 0).map(s => s.size))];
+    if (uniqueRemainingShipSizes.length === 0) return;
 
     let changed = false;
 
@@ -1440,7 +1441,7 @@ function globalConstraintSolver() {
         for (let x = 0; x < size; x++) {
             if (opponentGrid[y][x] === 'unknown') {
                 let canAnyShipFit = false;
-                for (const shipSize of remainingShipSizes) {
+                for (const shipSize of uniqueRemainingShipSizes) {
                     // Sprawdź wszystkie możliwe pozycje i orientacje
                     // Poziomo
                     for (let i = 0; i < shipSize; i++) {
@@ -1512,7 +1513,7 @@ function updatePossibleLayouts(shotX, shotY, result) {
     console.log(`AI: Redukcja rzeczywistości. Pozostało ${allPossibleOpponentLayouts.length} z ${previousCount}.`);
 
     // Sprawdź, czy nie trzeba uruchomić regeneracji
-    if (allPossibleOpponentLayouts.length < 10000 && opponentShips.reduce((acc, s) => acc + s.count, 0) > 3) {
+    if (allPossibleOpponentLayouts.length < 15000) {
         regenerateHypothesesAsync();
     }
 
