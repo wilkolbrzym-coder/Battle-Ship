@@ -129,7 +129,12 @@ function updateBoardFromResult(result) {
 
 function clearPreviousSuggestions() {
     ui.opponentBoard.querySelectorAll('.cell').forEach(cell => {
-        ['suggestion-1', 'suggestion-2', 'suggestion-3', 'suggestion-4', 'suggestion-5', 'hit', 'miss', 'sunk'].forEach(cls => cell.classList.remove(cls));
+        const classes = Array.from(cell.classList);
+        classes.forEach(c => {
+            if(c.startsWith('suggestion-') || ['hit', 'miss', 'sunk'].includes(c)) {
+                cell.classList.remove(c);
+            }
+        });
     });
 }
 

@@ -1,4 +1,4 @@
-mod hypothesis;
+pub mod hypothesis;
 
 use crate::utils::{Board, CellState, Position};
 use crate::analysis::solver::global_constraint_solver;
@@ -99,6 +99,6 @@ impl QuantumHunter {
         let top_5_raw: Vec<(u8, u8)> = moves.iter().take(5).map(|&(mv, _)| mv).collect();
         let (best_x, best_y) = verify_best_moves(&self.known_board, &top_5_raw);
         let top_5_pos = top_5_raw.into_iter().map(|(x, y)| Position {x, y}).collect();
-        (best_x, best_y, top_5_pos, false) // is_guaranteed placeholder
+        (best_x, best_y, top_5_pos, false)
     }
 }

@@ -56,18 +56,10 @@ impl GeneticArchitect {
     fn early_game_stealth_score(&self, ind: &Individual) -> f64 {
         let mut board = vec![vec![false; self.width as usize]; self.height as usize];
         ind.ships.iter().flat_map(|s| &s.positions).for_each(|p| board[p.y as usize][p.x as usize] = true);
-        let mut hits = 0;
         let shots = 15;
-        let mut shot_count = 0;
-        'outer: for y in 0..self.height {
-            for x in 0..self.width {
-                if (x + y) % 2 == 0 {
-                    if shot_count >= shots { break 'outer; }
-                    if board[y as usize][x as usize] { hits += 1; }
-                    shot_count += 1;
-                }
-            }
-        }
+        let mut hits = 0;
+        (0..self.height).step_by(2).flat_map(|y| (0..self.width).step_by(2).map(move |x| (x, y)))
+            .take(shots).for_each(|(x, y)| if board[y as usize][x as usize] { hits += 1; });
         1.0 - (hits as f64 / shots as f64)
     }
 
