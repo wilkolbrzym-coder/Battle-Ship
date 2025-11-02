@@ -401,11 +401,20 @@ function calculateVoIMap(probMap, grid) {
  * Ignoruje inne 'unknown' pola, ale respektuje 'miss' i 'hit'.
  */
 function canPlaceShipForProbability(grid, x, y, size, isVertical) {
+    const gridSize = grid.length;
+
     for (let i = 0; i < size; i++) {
         const currentX = isVertical ? x : x + i;
         const currentY = isVertical ? y + i : y;
-        if (currentX >= grid.length || currentY >= grid.length || grid[currentY][currentX] === 'miss' || grid[currentY][currentX] === 'sunk') {
-            return false; // Nie można umieścić statku na pudle, zatopionym statku lub poza planszą
+
+        // --- TWARDA KONTROLA GRANIC: Sprawdza, czy indeks jest ujemny LUB poza zakresem max (gridSize) ---
+        if (currentX < 0 || currentX >= gridSize || currentY < 0 || currentY >= gridSize) {
+            return false;
+        }
+
+        // Stara logika: sprawdza, czy pole jest zajęte
+        if (grid[currentY][currentX] === 'miss' || grid[currentY][currentX] === 'sunk') {
+            return false;
         }
     }
     return true;
@@ -556,12 +565,12 @@ function calculateFitness(individual, size) {
     const earlyGameStealthScore = simulateEarlyGameAttack(individual, size);
     const orientationBalanceScore = calculateOrientationBalance(individual);
 
-    // Finalne wagi "Poziomu Tytana"
-    const finalScore = (earlyGameStealthScore * 0.5) +     // Niewykrywalność
-                       (orientationBalanceScore * 0.2) +  // Balans orientacji
-                       (parityResistanceScore * 0.1) +    // Odporność na parzystość
-                       (ambiguityScore * 0.1) +           // Mylenie przeciwnika
-                       (balanceScore * 0.1);              // Ogólny balans na planszy
+    // Finalne wagi "Wersji 7.0 - Stabilizacja Kognitywna"
+    const finalScore = (earlyGameStealthScore * 0.7) +     // Niewykrywalność jest absolutnym priorytetem
+                       (orientationBalanceScore * 0.1) +  // Balans orientacji
+                       (parityResistanceScore * 0.05) +   // Pozostałe jako drugorzędne optymalizacje
+                       (ambiguityScore * 0.1) +
+                       (balanceScore * 0.05);
 
     return finalScore;
 }
@@ -1278,28 +1287,32 @@ function botTurn() {
             const unknownCells = [];
             for(let r=0; r<size; r++) for(let c=0; c<size; c++) if(opponentGrid[r][c] === 'unknown') unknownCells.push({x:c, y:r});
 
-            // "Tryb Egzekutora"
+            // "Tryb Egzekutora" (Ulepszony)
             const dynamicSmallestShip = Math.min(...opponentShips.filter(s => s.count > 0).map(s => s.size));
             if (dynamicSmallestShip <= 2 && unknownCells.length > (size * size * 0.5)) {
-                console.log("AI: Aktywacja Inteligentnego Trybu Egzekutora.");
-                const probMap = calculateProbabilityMap(opponentGrid);
+                console.log("AI: Aktywacja Ulepszonego Trybu Egzekutora.");
                 const parityMoves = unknownCells.filter(cell => (cell.x + cell.y) % dynamicSmallestShip === 0);
 
                 if (parityMoves.length > 0) {
-                    let bestParityMove = { x: -1, y: -1, prob: -1 };
-                    parityMoves.forEach(move => {
-                        if (probMap[move.y][move.x] > bestParityMove.prob) {
-                            bestParityMove = { x: move.x, y: move.y, prob: probMap[move.y][move.x] };
-                        }
-                    });
+                    let executorMoves = [];
+                    for (const cell of parityMoves) {
+                        const layoutsWithShipAtCell = allPossibleOpponentLayouts.filter(layout => layout[cell.y][cell.x] === 'ship').length;
+                        const hitProbability = layoutsWithShipAtCell / allPossibleOpponentLayouts.length;
+                        const layoutsWithoutShipAtCell = allPossibleOpponentLayouts.length - layoutsWithShipAtCell;
+                        const informationGainScore = Math.min(layoutsWithShipAtCell, layoutsWithoutShipAtCell);
+                        const quantumScore = informationGainScore * 0.7 + (layoutsWithShipAtCell * 0.3);
+                        executorMoves.push({ x: cell.x, y: cell.y, score: quantumScore });
+                    }
 
-                    x = bestParityMove.x;
-                    y = bestParityMove.y;
+                    executorMoves.sort((a, b) => b.score - a.score);
+                    const bestMove = executorMoves[0];
+                    x = bestMove.x;
+                    y = bestMove.y;
 
                     lastShot = { x, y };
                     const coordString = `${String.fromCharCode(65 + y)}${x + 1}`;
                     document.getElementById('bot-suggestion').textContent = coordString;
-                    console.log(`Bot (Egzekutor) sugeruje strzał w: (${x}, ${y}) z prawdopodobieństwem ${bestParityMove.prob.toFixed(2)}`);
+                    console.log(`Bot (Egzekutor) sugeruje strzał w: (${x}, ${y}) z wynikiem kwantowym ${bestMove.score.toFixed(2)}`);
                     return;
                 }
             }
@@ -1391,17 +1404,23 @@ function globalConstraintSolver() {
                     // Sprawdź wszystkie możliwe pozycje i orientacje
                     // Poziomo
                     for (let i = 0; i < shipSize; i++) {
-                        if (canPlaceShipForProbability(opponentGrid, x - i, y, shipSize, false)) {
-                            canAnyShipFit = true;
-                            break;
+                        const checkXStart = x - i;
+                        if (checkXStart >= 0 && checkXStart + shipSize <= size) {
+                            if (canPlaceShipForProbability(opponentGrid, checkXStart, y, shipSize, false)) {
+                                canAnyShipFit = true;
+                                break;
+                            }
                         }
                     }
                     if (canAnyShipFit) break;
                     // Pionowo
                     for (let i = 0; i < shipSize; i++) {
-                        if (canPlaceShipForProbability(opponentGrid, x, y - i, shipSize, true)) {
-                            canAnyShipFit = true;
-                            break;
+                        const checkYStart = y - i;
+                        if (checkYStart >= 0 && checkYStart + shipSize <= size) {
+                            if (canPlaceShipForProbability(opponentGrid, x, checkYStart, shipSize, true)) {
+                                canAnyShipFit = true;
+                                break;
+                            }
                         }
                     }
                     if (canAnyShipFit) break;
