@@ -166,25 +166,54 @@ let turnCounter = 1;
 let allPossibleOpponentLayouts = []; // Globalna tablica przechowująca "możliwe rzeczywistości"
 
 /**
- * Inicjalizuje Łowcę Kwantowego, generując początkowy zbiór możliwych układów planszy przeciwnika.
+ * Pokazuje wskaźnik myślenia AI.
+ */
+function showThinkingIndicator() {
+    document.getElementById('ai-thinking-indicator').classList.remove('hidden');
+}
+
+/**
+ * Ukrywa wskaźnik myślenia AI.
+ */
+function hideThinkingIndicator() {
+    document.getElementById('ai-thinking-indicator').classList.add('hidden');
+}
+
+/**
+ * Inicjalizuje Łowcę Kwantowego, generując asynchronicznie początkowy zbiór możliwych układów.
  */
 function initializeQuantumHunter() {
-    console.log("AI: Inicjalizacja Silnika 'Możliwych Rzeczywistości'...");
+    console.log("AI: Asynchroniczna Inicjalizacja Silnika 'Możliwych Rzeczywistości'...");
+    showThinkingIndicator();
+    allPossibleOpponentLayouts = [];
     const size = currentConfig.size;
     const shipsConfig = currentConfig.ships;
-    const maxLayouts = 50000; // Ograniczenie, aby uniknąć problemów z wydajnością
+    const targetLayouts = 50000;
+    const chunkSize = 500; // Liczba układów generowanych w jednym "kawałku" czasu
 
-    allPossibleOpponentLayouts = [];
-    let attempts = 0;
-
-    while(allPossibleOpponentLayouts.length < maxLayouts && attempts < maxLayouts * 10) {
-        attempts++;
-        const newLayout = generateRandomValidLayout(size, shipsConfig);
-        if (newLayout) {
-            allPossibleOpponentLayouts.push(newLayout);
+    function generateChunk() {
+        if (allPossibleOpponentLayouts.length >= targetLayouts) {
+            console.log(`AI: Wygenerowano ${allPossibleOpponentLayouts.length} możliwych rzeczywistości. Gotów do polowania.`);
+            hideThinkingIndicator();
+            return;
         }
+
+        for (let i = 0; i < chunkSize; i++) {
+            const newLayout = generateRandomValidLayout(size, shipsConfig);
+            if (newLayout) {
+                allPossibleOpponentLayouts.push(newLayout);
+            }
+        }
+
+        // Zaktualizuj licznik w UI, aby pokazać postęp
+        // (można dodać element UI w przyszłości)
+        console.log(`Generowanie hipotez: ${allPossibleOpponentLayouts.length} / ${targetLayouts}`);
+
+        // Zaplanuj następny kawałek, oddając kontrolę przeglądarce
+        setTimeout(generateChunk, 0);
     }
-    console.log(`AI: Wygenerowano ${allPossibleOpponentLayouts.length} możliwych rzeczywistości. Gotów do polowania.`);
+
+    generateChunk();
 }
 
 /**
@@ -482,12 +511,14 @@ function calculateFitness(individual, size) {
     const ambiguityScore = calculateAmbiguity(individual, size);
     const balanceScore = calculateBalance(individual, size);
     const earlyGameStealthScore = simulateEarlyGameAttack(individual, size);
+    const orientationBalanceScore = calculateOrientationBalance(individual);
 
-    // Ostateczny szlif wag: "niewykrywalność" jest absolutnym priorytetem.
-    const finalScore = (earlyGameStealthScore * 0.6) + // 60% wagi!
-                       (parityResistanceScore * 0.15) +
-                       (ambiguityScore * 0.15) +
-                       (balanceScore * 0.1);
+    // Finalne wagi "Poziomu Tytana"
+    const finalScore = (earlyGameStealthScore * 0.5) +     // Niewykrywalność
+                       (orientationBalanceScore * 0.2) +  // Balans orientacji
+                       (parityResistanceScore * 0.1) +    // Odporność na parzystość
+                       (ambiguityScore * 0.1) +           // Mylenie przeciwnika
+                       (balanceScore * 0.1);              // Ogólny balans na planszy
 
     return finalScore;
 }
@@ -630,6 +661,26 @@ function simulateEarlyGameAttack(individual, size) {
 
     // Wynik jest odwrotnie proporcjonalny do liczby trafień. Zero trafień = perfekcyjny wynik 1.0.
     return 1.0 - (hits / simulationShots);
+}
+
+/**
+ * Oblicza zrównoważenie orientacji statków (pionowe vs. poziome).
+ * @param {Array<object>} individual - Układ statków.
+ * @returns {number} - Wynik (1.0 za idealny balans, malejący z odchyleniem).
+ */
+function calculateOrientationBalance(individual) {
+    if (individual.length === 0) return 0;
+
+    let verticalCount = 0;
+    individual.forEach(ship => {
+        if (ship.positions.length > 1 && ship.positions[0].x === ship.positions[1].x) {
+            verticalCount++;
+        }
+    });
+
+    const horizontalCount = individual.length - verticalCount;
+    const balance = 1.0 - (Math.abs(verticalCount - horizontalCount) / individual.length);
+    return balance;
 }
 
 
@@ -1158,6 +1209,15 @@ function botTurn() {
             y = guaranteedHit.y;
         } else {
             // Zbieranie danych dla Kontrolera Taktycznego i decyzja o trybie
+            let huntingPriority = null; // null = tryb ogólny, liczba = priorytet na statek o danym rozmiarze
+            const remainingShipSizes = opponentShips.filter(s => s.count > 0).map(s => s.size);
+            if (remainingShipSizes.includes(5) || remainingShipSizes.includes(4)) {
+                huntingPriority = Math.max(...remainingShipSizes);
+            } else if (remainingShipSizes.length > 0) {
+                huntingPriority = Math.max(...remainingShipSizes);
+            }
+            console.log(`AI (Polowanie): Priorytet na statek o rozmiarze: ${huntingPriority || 'brak (tryb ogólny)'}`);
+
             const gameState = {
                 playerShipsLeft: playerShips.filter(s => !s.isSunk).length,
                 opponentShipsLeft: opponentShips.reduce((acc, s) => acc + s.count, 0),
@@ -1201,20 +1261,16 @@ function botTurn() {
                     }
 
                     const layoutsWithoutShipAtCell = allPossibleOpponentLayouts.length - layoutsWithShipAtCell;
-                    const informationGainScore = Math.min(layoutsWithShipAtCell, layoutsWithoutShipAtCell);
+                    let quantumScore;
 
-                    let infoGainWeight = 0.7; // Domyślna waga dla trybu BALANCED
-                    let hitProbWeight = 0.3;
-
-                    if (tacticalController.currentMode === 'AGGRESSIVE') {
-                        infoGainWeight = 0.5;
-                        hitProbWeight = 0.5;
-                    } else if (tacticalController.currentMode === 'CAUTIOUS') {
-                        infoGainWeight = 0.8;
-                        hitProbWeight = 0.2;
+                    if (huntingPriority) {
+                        const targetedVoIScore = calculateTargetedVoI(cell.x, cell.y, huntingPriority);
+                        quantumScore = (targetedVoIScore * 0.6) + (hitProbability * 0.4); // VoI jest ważniejsze w polowaniu
+                    } else {
+                        // Tryb ogólny, gdy nie ma jasnego priorytetu
+                        const informationGainScore = Math.min(layoutsWithShipAtCell, layoutsWithoutShipAtCell);
+                        quantumScore = informationGainScore * 0.7 + (layoutsWithShipAtCell * 0.3);
                     }
-
-                    const quantumScore = informationGainScore * infoGainWeight + (layoutsWithShipAtCell * hitProbWeight);
 
                     allMoves.push({ x: cell.x, y: cell.y, score: quantumScore });
                 }
@@ -1261,62 +1317,73 @@ function botTurn() {
  */
 
 /**
- * Po zatopieniu statku, ta funkcja dedukuje, czy otaczające go pola można oznaczyć jako 'miss'.
- * @param {Array<{x: number, y: number}>} shipCoords - Współrzędne zatopionego statku.
+ * Przeszukuje całą planszę w poszukiwaniu pól, które na pewno są puste.
+ * Działa na zasadzie "Constraint Satisfaction".
  */
-function deduceSunkShipSurroundings(shipCoords) {
+function globalConstraintSolver() {
     const size = currentConfig.size;
-    const surroundingCells = new Set();
-
-    // 1. Zbierz wszystkie unikalne komórki otaczające statek
-    shipCoords.forEach(pos => {
-        for (let dy = -1; dy <= 1; dy++) {
-            for (let dx = -1; dx <= 1; dx++) {
-                const checkX = pos.x + dx;
-                const checkY = pos.y + dy;
-                if (checkX >= 0 && checkX < size && checkY >= 0 && checkY < size) {
-                    if (opponentGrid[checkY][checkX] === 'unknown') {
-                        surroundingCells.add(`${checkX},${checkY}`);
-                    }
-                }
-            }
-        }
-    });
-
-    // 2. Dla każdej komórki w otoczeniu, sprawdź, czy jakikolwiek pozostały statek może tam w ogóle być
-    const remainingShipSizes = opponentShips.filter(s => s.count > 0).map(s => s.size);
+    const remainingShipSizes = opponentShips.flatMap(s => Array(s.count).fill(s.size));
     if (remainingShipSizes.length === 0) return;
 
-    surroundingCells.forEach(cellString => {
-        const [x, y] = cellString.split(',').map(Number);
-        let canAnyShipFit = false;
+    let changed = false;
 
-        for (const shipSize of remainingShipSizes) {
-            // Sprawdź wszystkie możliwe orientacje i pozycje dla tego statku, które pokrywają to pole
-            // Poziomo
-            for (let i = 0; i < shipSize; i++) {
-                if (canPlaceShipForProbability(opponentGrid, x - i, y, shipSize, false)) {
-                    canAnyShipFit = true;
-                    break;
+    for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+            if (opponentGrid[y][x] === 'unknown') {
+                let canAnyShipFit = false;
+                for (const shipSize of remainingShipSizes) {
+                    // Sprawdź wszystkie możliwe pozycje i orientacje
+                    // Poziomo
+                    for (let i = 0; i < shipSize; i++) {
+                        if (canPlaceShipForProbability(opponentGrid, x - i, y, shipSize, false)) {
+                            canAnyShipFit = true;
+                            break;
+                        }
+                    }
+                    if (canAnyShipFit) break;
+                    // Pionowo
+                    for (let i = 0; i < shipSize; i++) {
+                        if (canPlaceShipForProbability(opponentGrid, x, y - i, shipSize, true)) {
+                            canAnyShipFit = true;
+                            break;
+                        }
+                    }
+                    if (canAnyShipFit) break;
+                }
+
+                if (!canAnyShipFit) {
+                    opponentGrid[y][x] = 'miss';
+                    console.log(`AI (Globalna Dedykcja): Pole (${x},${y}) oznaczone jako PUDŁO.`);
+                    changed = true;
                 }
             }
-            if (canAnyShipFit) break;
-            // Pionowo
-            for (let i = 0; i < shipSize; i++) {
-                if (canPlaceShipForProbability(opponentGrid, x, y - i, shipSize, true)) {
-                    canAnyShipFit = true;
-                    break;
-                }
-            }
-            if (canAnyShipFit) break;
         }
+    }
+    return changed;
+}
 
-        // 3. Jeśli żaden statek nie może pasować, to pole musi być 'miss'
-        if (!canAnyShipFit) {
-            console.log(`AI (DEDUKCJA): Pole (${x},${y}) nie może zawierać żadnego z pozostałych statków. Oznaczam jako PUDŁO.`);
-            opponentGrid[y][x] = 'miss';
+/**
+ * Oblicza "ukierunkowaną" Wartość Informacji dla konkretnego rozmiaru statku.
+ * @param {number} x - Współrzędna X pola.
+ * @param {number} y - Współrzędna Y pola.
+ * @param {number} shipSize - Rozmiar statku, na który polujemy.
+ * @returns {number} - Wynik VoI dla tego celu.
+ */
+function calculateTargetedVoI(x, y, shipSize) {
+    let informationValue = 0;
+    // Poziomo
+    for (let i = 0; i < shipSize; i++) {
+        if (canPlaceShipForProbability(opponentGrid, x - i, y, shipSize, false)) {
+            informationValue++;
         }
-    });
+    }
+    // Pionowo
+    for (let i = 0; i < shipSize; i++) {
+        if (canPlaceShipForProbability(opponentGrid, x, y - i, shipSize, true)) {
+            informationValue++;
+        }
+    }
+    return informationValue;
 }
 
 
@@ -1328,6 +1395,84 @@ function updatePossibleLayouts(shotX, shotY, result) {
         allPossibleOpponentLayouts = allPossibleOpponentLayouts.filter(layout => layout[shotY][shotX] === 'ship');
     }
     console.log(`AI: Redukcja rzeczywistości. Pozostało ${allPossibleOpponentLayouts.length} z ${previousCount}.`);
+
+    // Sprawdź, czy nie trzeba uruchomić regeneracji
+    if (allPossibleOpponentLayouts.length < 10000 && opponentShips.reduce((acc, s) => acc + s.count, 0) > 3) {
+        regenerateHypothesesAsync();
+    }
+
+    // Weryfikator Kontradykcji
+    if (allPossibleOpponentLayouts.length === 0) {
+        console.error("AI: WYKRYTO KONTRADYKCJĘ! Liczba hipotez spadła do zera.");
+        alert("Wykryto sprzeczność w podanych informacjach. Prawdopodobnie ostatni zgłoszony wynik strzału był nieprawidłowy. Automatycznie cofam ostatni ruch, proszę o ponowne podanie wyniku.");
+
+        // Użyj istniejącej logiki cofania
+        if (history.length > 0) {
+            const lastState = history.pop();
+            opponentGrid = lastState.grid;
+            opponentShips = lastState.ships;
+            botState = lastState.botState;
+            currentTargetHits = lastState.currentTargetHits;
+            lastShot = lastState.lastShot;
+            renderBoard('opponent-board', opponentGrid);
+            console.log("Cofnięto ostatni ruch z powodu kontradykcji.");
+            // Nie wykonuj tury bota, czekaj na ponowne wprowadzenie danych przez gracza
+            return; // Zwróć, aby uniknąć wywołania botTurn() w updateAfterBotShot
+        }
+    }
+}
+
+/**
+ * Asynchronicznie dogenerowuje i filtruje nowe hipotezy w tle.
+ */
+function regenerateHypothesesAsync() {
+    console.log("AI: Uruchomiono ciągłą regenerację hipotez w tle...");
+    showThinkingIndicator();
+    const size = currentConfig.size;
+    const shipsConfig = currentConfig.ships;
+    const regenerationChunk = 500;
+    const targetAddition = 5000;
+    let addedCount = 0;
+
+    function generateAndFilterChunk() {
+        if (addedCount >= targetAddition) {
+            console.log(`AI: Zakończono regenerację. Dodano ${addedCount} nowych hipotez.`);
+            hideThinkingIndicator();
+            return;
+        }
+
+        let newHypotheses = [];
+        for (let i = 0; i < regenerationChunk; i++) {
+            const newLayout = generateRandomValidLayout(size, shipsConfig);
+            if (newLayout) {
+                // Natychmiastowa filtracja nowej hipotezy
+                let isValid = true;
+                for (let y = 0; y < size; y++) {
+                    for (let x = 0; x < size; x++) {
+                        const cellState = opponentGrid[y][x];
+                        if (cellState === 'miss' && newLayout[y][x] !== 'water') {
+                            isValid = false;
+                            break;
+                        }
+                        if ((cellState === 'hit' || cellState === 'damaged') && newLayout[y][x] !== 'ship') {
+                            isValid = false;
+                            break;
+                        }
+                    }
+                    if (!isValid) break;
+                }
+                if (isValid) {
+                    newHypotheses.push(newLayout);
+                }
+            }
+        }
+
+        allPossibleOpponentLayouts.push(...newHypotheses);
+        addedCount += newHypotheses.length;
+
+        setTimeout(generateAndFilterChunk, 0);
+    }
+    generateAndFilterChunk();
 }
 
 function updateAfterBotShot(result) {
@@ -1346,9 +1491,6 @@ function updateAfterBotShot(result) {
 
     const { x, y } = lastShot;
 
-    // Zaktualizuj "pamięć" bota o nową informację
-    updatePossibleLayouts(x, y, result);
-
     const cellElement = document.querySelector(`#opponent-board .cell[data-x='${x}'][data-y='${y}']`);
 
     switch (result) {
@@ -1357,6 +1499,14 @@ function updateAfterBotShot(result) {
             triggerAnimation(cellElement, 'animate-miss', 400);
             cellElement.classList.add('miss');
             tacticalController.recordShot(false);
+
+            // Uruchom globalny solver z ograniczeniem iteracji
+            for (let i = 0; i < 4; i++) {
+                if (!globalConstraintSolver()) {
+                    break; // Przerwij, jeśli nie znaleziono żadnych nowych pewników
+                }
+                console.log(`AI (Globalna Dedykcja): Iteracja ${i+1}...`);
+            }
             break;
         case 'Trafiony':
         case 'Uszkodzony':
@@ -1389,11 +1539,18 @@ function updateAfterBotShot(result) {
                     }
                 });
 
-                // Najpierw zaawansowana dedukcja, potem standardowe oznaczanie
-                deduceSunkShipSurroundings(shipCoords);
+                // Najpierw standardowe oznaczanie, a potem globalna dedukcja
                 markSurroundingAsMiss(shipCoords);
 
-                renderBoard('opponent-board', opponentGrid); // Przerenderuj, aby pokazać pola 'miss'
+                // Uruchom globalny solver z ograniczeniem iteracji
+                for (let i = 0; i < 4; i++) {
+                    if (!globalConstraintSolver()) {
+                        break; // Przerwij, jeśli nie znaleziono żadnych nowych pewników
+                    }
+                    console.log(`AI (Globalna Dedykcja): Iteracja ${i+1}...`);
+                }
+
+                renderBoard('opponent-board', opponentGrid); // Przerenderuj, aby pokazać wszystkie nowe 'miss'
             }, 550);
 
 
@@ -1423,6 +1580,9 @@ function updateAfterBotShot(result) {
             break;
     }
     renderBoard('opponent-board', opponentGrid); // Odśwież widok planszy
+
+    // Zaktualizuj "pamięć" bota o nową informację - teraz, gdy plansza jest już w pełni zaktualizowana
+    updatePossibleLayouts(x, y, result);
 }
 
 /**
@@ -1549,8 +1709,13 @@ function showEndScreen(message) {
 
 function saveOpponentProfile() {
     try {
-        localStorage.setItem('battleshipAI_opponentProfile', JSON.stringify(opponentProfile));
-        console.log("Pamięć Długotrwała: Profil przeciwnika został zapisany.");
+        const fullProfile = {
+            placement: opponentProfile.placementBias,
+            orientation: opponentProfile.orientationBias
+            // W przyszłości można dodać: tactical: tacticalProfile
+        };
+        localStorage.setItem('battleshipAI_opponentProfile_v2', JSON.stringify(fullProfile));
+        console.log("Pamięć Długotrwała: Rozbudowany profil przeciwnika został zapisany.");
     } catch (e) {
         console.error("Nie udało się zapisać profilu przeciwnika:", e);
     }
@@ -1558,16 +1723,16 @@ function saveOpponentProfile() {
 
 function loadOpponentProfile() {
     try {
-        const savedProfile = localStorage.getItem('battleshipAI_opponentProfile');
+        const savedProfile = localStorage.getItem('battleshipAI_opponentProfile_v2');
         if (savedProfile) {
             const loaded = JSON.parse(savedProfile);
             // Stopniowe dostosowanie, a nie całkowite zastąpienie
-            opponentProfile.placementBias.edge = (opponentProfile.placementBias.edge + loaded.placementBias.edge) / 2;
-            opponentProfile.placementBias.center = (opponentProfile.placementBias.center + loaded.placementBias.center) / 2;
-            opponentProfile.placementBias.corner = (opponentProfile.placementBias.corner + loaded.placementBias.corner) / 2;
-            opponentProfile.orientationBias.vertical = (opponentProfile.orientationBias.vertical + loaded.orientationBias.vertical) / 2;
-            opponentProfile.orientationBias.horizontal = (opponentProfile.orientationBias.horizontal + loaded.orientationBias.horizontal) / 2;
-            console.log("Pamięć Długotrwała: Profil przeciwnika został załadowany i zaadaptowany.");
+            opponentProfile.placementBias.edge = (opponentProfile.placementBias.edge + loaded.placement.edge) / 2;
+            opponentProfile.placementBias.center = (opponentProfile.placementBias.center + loaded.placement.center) / 2;
+            opponentProfile.placementBias.corner = (opponentProfile.placementBias.corner + loaded.placement.corner) / 2;
+            opponentProfile.orientationBias.vertical = (opponentProfile.orientationBias.vertical + loaded.orientation.vertical) / 2;
+            opponentProfile.orientationBias.horizontal = (opponentProfile.orientationBias.horizontal + loaded.orientation.horizontal) / 2;
+            console.log("Pamięć Długotrwała: Rozbudowany profil przeciwnika został załadowany i zaadaptowany.");
         } else {
              console.log("Pamięć Długotrwała: Nie znaleziono zapisanego profilu. Rozpoczynam z czystą kartą.");
         }
