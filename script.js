@@ -382,7 +382,8 @@ const opponentProfile = {
 function updateOpponentProfile(ship) {
     // Prosta logika do demonstracji
     const size = currentConfig.size;
-    const isVertical = ship.positions[0].x === ship.positions[1].x;
+    // Sprawdzenie, czy statek ma więcej niż jeden segment, aby uniknąć błędu
+    const isVertical = ship.positions.length > 1 && ship.positions[0].x === ship.positions[1].x;
     if (isVertical) opponentProfile.orientationBias.vertical++;
     else opponentProfile.orientationBias.horizontal++;
 
@@ -1208,15 +1209,19 @@ function botTurn() {
             x = guaranteedHit.x;
             y = guaranteedHit.y;
         } else {
-            // Zbieranie danych dla Kontrolera Taktycznego i decyzja o trybie
-            let huntingPriority = null; // null = tryb ogólny, liczba = priorytet na statek o danym rozmiarze
-            const remainingShipSizes = opponentShips.filter(s => s.count > 0).map(s => s.size);
-            if (remainingShipSizes.includes(5) || remainingShipSizes.includes(4)) {
-                huntingPriority = Math.max(...remainingShipSizes);
-            } else if (remainingShipSizes.length > 0) {
-                huntingPriority = Math.max(...remainingShipSizes);
+            // "Polowanie na Grubego Zwierza": Sztywna hierarchia priorytetów
+            let huntingPriority = null;
+            const remainingShips = opponentShips.filter(s => s.count > 0);
+            if (remainingShips.some(s => s.size === 5)) {
+                huntingPriority = 5;
+            } else if (remainingShips.some(s => s.size === 4)) {
+                huntingPriority = 4;
+            } else if (remainingShips.some(s => s.size === 3)) {
+                huntingPriority = 3;
+            } else if (remainingShips.length > 0) {
+                huntingPriority = Math.min(...remainingShips.map(s => s.size)); // Gdy zostaną tylko małe, skup się na najmniejszym
             }
-            console.log(`AI (Polowanie): Priorytet na statek o rozmiarze: ${huntingPriority || 'brak (tryb ogólny)'}`);
+            console.log(`AI (Polowanie na Grubego Zwierza): Priorytet na statek o rozmiarze: ${huntingPriority || 'brak'}`);
 
             const gameState = {
                 playerShipsLeft: playerShips.filter(s => !s.isSunk).length,
@@ -1233,20 +1238,28 @@ function botTurn() {
 
             // "Tryb Egzekutora"
             const dynamicSmallestShip = Math.min(...opponentShips.filter(s => s.count > 0).map(s => s.size));
-            if (dynamicSmallestShip <= 2 && unknownCells.length > (size*size*0.5)) {
-                 console.log("AI: Aktywacja Trybu Egzekutora opartego na parzystości.");
-                 const parityMoves = unknownCells.filter(cell => (cell.x + cell.y) % dynamicSmallestShip === 0);
-                 if (parityMoves.length > 0) {
-                     const randomCell = parityMoves[Math.floor(Math.random() * parityMoves.length)];
-                     x = randomCell.x;
-                     y = randomCell.y;
-                     // Pomiń resztę skomplikowanej analizy
-                     lastShot = { x, y };
-                     const coordString = `${String.fromCharCode(65 + y)}${x + 1}`;
-                     document.getElementById('bot-suggestion').textContent = coordString;
-                     console.log(`Bot (Egzekutor) sugeruje strzał w: (${x}, ${y})`);
-                     return;
-                 }
+            if (dynamicSmallestShip <= 2 && unknownCells.length > (size * size * 0.5)) {
+                console.log("AI: Aktywacja Inteligentnego Trybu Egzekutora.");
+                const probMap = calculateProbabilityMap(opponentGrid);
+                const parityMoves = unknownCells.filter(cell => (cell.x + cell.y) % dynamicSmallestShip === 0);
+
+                if (parityMoves.length > 0) {
+                    let bestParityMove = { x: -1, y: -1, prob: -1 };
+                    parityMoves.forEach(move => {
+                        if (probMap[move.y][move.x] > bestParityMove.prob) {
+                            bestParityMove = { x: move.x, y: move.y, prob: probMap[move.y][move.x] };
+                        }
+                    });
+
+                    x = bestParityMove.x;
+                    y = bestParityMove.y;
+
+                    lastShot = { x, y };
+                    const coordString = `${String.fromCharCode(65 + y)}${x + 1}`;
+                    document.getElementById('bot-suggestion').textContent = coordString;
+                    console.log(`Bot (Egzekutor) sugeruje strzał w: (${x}, ${y}) z prawdopodobieństwem ${bestParityMove.prob.toFixed(2)}`);
+                    return;
+                }
             }
 
             for (const cell of unknownCells) {
@@ -1265,7 +1278,8 @@ function botTurn() {
 
                     if (huntingPriority) {
                         const targetedVoIScore = calculateTargetedVoI(cell.x, cell.y, huntingPriority);
-                        quantumScore = (targetedVoIScore * 0.6) + (hitProbability * 0.4); // VoI jest ważniejsze w polowaniu
+                        let voiWeight = (huntingPriority >= 4) ? 0.8 : 0.6; // Wzmocnienie VoI dla dużych statków
+                        quantumScore = (targetedVoIScore * voiWeight) + (hitProbability * (1 - voiWeight));
                     } else {
                         // Tryb ogólny, gdy nie ma jasnego priorytetu
                         const informationGainScore = Math.min(layoutsWithShipAtCell, layoutsWithoutShipAtCell);
@@ -1454,7 +1468,7 @@ function regenerateHypothesesAsync() {
                             isValid = false;
                             break;
                         }
-                        if ((cellState === 'hit' || cellState === 'damaged') && newLayout[y][x] !== 'ship') {
+                        if ((cellState === 'hit' || cellState === 'damaged' || cellState === 'sunk') && newLayout[y][x] !== 'ship') {
                             isValid = false;
                             break;
                         }
