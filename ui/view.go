@@ -19,12 +19,12 @@ var (
 			Padding(0, 1).
 			Bold(true)
 
-	// Kolory komórek
+	// Kolory komórek - wyraźniejsze rozróżnienie
 	waterStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#244")).SetString("·") // Ciemny szary
 	shipStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#DDD")).SetString("■") // Jasny szary
-	hitStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#F00")).SetString("X") // Czerwony
-	missStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#55F")).SetString("○") // Niebieski
-	sunkStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#900")).SetString("#") // Ciemny czerwony
+	hitStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFA500")).SetString("X") // Pomarańczowy dla trafienia
+	missStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#55F")).SetString("○") // Niebieski dla pudła
+	sunkStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#F00")).Bold(true).SetString("#") // Czerwony dla zatopienia
 	cursorStyle = lipgloss.NewStyle().Background(lipgloss.Color("#444")) // Tło kursora
 
 	// Układ
@@ -32,6 +32,8 @@ var (
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(lipgloss.Color("63")).
 				Padding(0, 1)
+
+	logStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#AAA"))
 )
 
 type GameState int
@@ -41,6 +43,7 @@ const (
 	StatePlayerTurn
 	StateBotTurn
 	StateGameOver
+	StateHelp
 )
 
 type Model struct {
@@ -63,23 +66,22 @@ func InitialModel() Model {
 	// Konfiguracja gry
 	config := game.DefaultConfig
 
-	// Inicjalizacja gracza (losowe rozmieszczenie dla uproszczenia, można dodać manualne)
+	// Inicjalizacja gracza
 	pBoard := game.NewBoard(config.Size)
-	// Dla gracza też używamy "zoptymalizowanego" losowania, żeby miał szansę ;)
-	// Ale w sumie wystarczy zwykłe random.
+	// Gracz też dostaje optymalny układ, żeby było sprawiedliwie
 	if err := pBoard.PlaceShipsRandomly(config); err != nil {
 		panic("Nie udało się stworzyć planszy gracza")
 	}
 
 	// Inicjalizacja bota
 	botAI := ai.NewQuantumHunter(config)
-	bBoard := botAI.GetOptimizedLayout() // Bot bierze najlepszy układ
+	bBoard := botAI.GetOptimizedLayout()
 
 	botView := make([][]game.CellState, config.Size)
 	for i := range botView {
 		botView[i] = make([]game.CellState, config.Size)
 		for j := range botView[i] {
-			botView[i][j] = game.CellWater // Nieznane
+			botView[i][j] = game.CellWater
 		}
 	}
 
@@ -91,7 +93,7 @@ func InitialModel() Model {
 		botAI:       botAI,
 		cursorX:     0,
 		cursorY:     0,
-		logs:        []string{"Welcome to Battleship 2.0!", "Press Enter to start."},
+		logs:        []string{"Welcome to Battleship 2.0!", "Press '?' for help, Enter to start."},
 	}
 }
 
@@ -111,6 +113,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 
+		if msg.String() == "?" {
+			if m.state != StateHelp {
+				m.log("Showing help...")
+				// Zapisz poprzedni stan? Uproszczenie: help jest osobnym stanem
+				// Ale lepiej zrobić toggle overlay.
+				// Tutaj: jeśli nie jesteśmy w menu, pauzujemy.
+				if m.state != StateGameOver && m.state != StateWelcome {
+					// Dla prostoty, logujemy legendę zamiast zmiany stanu ekranu
+					m.log("LEGEND: ■ Ship, X Hit, # Sunk, ○ Miss")
+					m.log("CONTROLS: Arrows to move, Enter/Space to fire")
+					return m, nil
+				}
+			}
+		}
+
 		switch m.state {
 		case StateWelcome:
 			if msg.String() == "enter" {
@@ -120,31 +137,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case StatePlayerTurn:
 			switch msg.String() {
-			case "up":
+			case "up", "k":
 				if m.cursorY > 0 { m.cursorY-- }
-			case "down":
+			case "down", "j":
 				if m.cursorY < game.BoardSize-1 { m.cursorY++ }
-			case "left":
+			case "left", "h":
 				if m.cursorX > 0 { m.cursorX-- }
-			case "right":
+			case "right", "l":
 				if m.cursorX < game.BoardSize-1 { m.cursorX++ }
 			case "enter", "space":
-				// Strzał gracza
 				m.handlePlayerShot()
 			}
 
 		case StateGameOver:
 			if msg.String() == "enter" {
-				// Restart (uproszczony - reload aplikacji byłby lepszy, ale tu resetujemy stan)
 				return InitialModel(), nil
 			}
 		}
 	}
 
-	// Automatyczna tura bota po krótkim opóźnieniu (symulowanym przez Update loop,
-	// ale w TUI lepiej to robić synchronicznie lub przez Cmd)
 	if m.state == StateBotTurn {
-		// Tutaj robimy ruch bota od razu
 		m.handleBotTurn()
 	}
 
@@ -152,150 +164,163 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handlePlayerShot() {
+	if m.cursorY < 0 || m.cursorY >= game.BoardSize || m.cursorX < 0 || m.cursorX >= game.BoardSize {
+		return // Sanity check
+	}
+
 	state := m.botView[m.cursorY][m.cursorX]
 	if state == game.CellHit || state == game.CellMiss || state == game.CellSunk {
-		m.log("Field already shot!")
+		m.log("Field already shot! Choose another.")
 		return
 	}
 
-	// Wykonaj strzał na prawdziwej planszy bota
+	// Strzał
 	res, msg := m.botBoard.Fire(m.cursorX, m.cursorY)
-
-	// Zaktualizuj widok gracza
-	// Jeśli zatopiony, musimy pobrać info z planszy bota, które pola są zatopione
-	// Ponieważ Fire() w logic.go aktualizuje stan na planszy bota
-	// Musimy skopiować ten stan do botView w miejscach gdzie nastąpiła zmiana.
-	// Najprościej: zaktualizować komórkę i sprawdzić czy statek zatonął.
-
-	m.botView[m.cursorY][m.cursorX] = res
+	m.botView[m.cursorY][m.cursorX] = res // Aktualizacja lokalnego widoku
 
 	if res == game.CellSunk {
-		// Znajdź statek na planszy bota, który ma ten ID (nie mamy ID w widoku, ale board.Fire aktualizuje grid)
-		// Pobierzemy stan bezpośrednio z botBoard dla tego pola i okolic (autouzupełnianie)
-		// Bruteforce update view from board for changed cells
-		m.syncBotView()
+		m.syncBotView() // Pociągnij info o całym zatopionym statku
 	}
 
-	m.log(fmt.Sprintf("Player shoots at %s: %s", coordStr(m.cursorX, m.cursorY), msg))
+	m.log(fmt.Sprintf("You fired at %s: %s", coordStr(m.cursorX, m.cursorY), msg))
 
 	if m.botBoard.AllShipsSunk() {
 		m.state = StateGameOver
 		m.winner = "PLAYER"
-		m.log("Congratulations! You won!")
+		m.log("Congratulations! You defeated the AI!")
 		return
 	}
 
 	if res == game.CellMiss {
 		m.state = StateBotTurn
-		m.log("Bot's turn...")
+		m.log("Bot is calculating 50,000 realities...")
 	} else {
-		m.log("Hit! Shoot again.")
+		m.log("Hit! Take another shot!")
 	}
 }
 
 func (m *Model) handleBotTurn() {
-	// Bot myśli...
-	bx, by := m.botAI.GetBestMove()
+	bx, by, confidence := m.botAI.GetBestMove()
+
+	// Formatowanie pewności siebie bota
+	confStr := fmt.Sprintf("%.1f%%", confidence*100)
 
 	res, msg := m.playerBoard.Fire(bx, by)
 
-	// Aktualizacja wiedzy bota
 	m.botAI.UpdateGameState(bx, by, res)
-	// Jeśli zatopiony, bot w logic.go sam sobie oznacza Sunk na planszy OpponentGrid poprzez UpdateGameState
 
-	m.log(fmt.Sprintf("Bot shoots at %s: %s", coordStr(bx, by), msg))
+	botMsg := fmt.Sprintf("Bot targets %s (conf: %s): %s", coordStr(bx, by), confStr, msg)
+	m.log(botMsg)
 
 	if m.playerBoard.AllShipsSunk() {
 		m.state = StateGameOver
 		m.winner = "BOT"
-		m.log("Game Over. Bot wins!")
+		m.log("Game Over. The Quantum Hunter prevails.")
 		return
 	}
 
 	if res == game.CellMiss {
 		m.state = StatePlayerTurn
-		m.log("Your turn.")
+		m.log("Bot missed. Your turn.")
 	} else {
-		// Bot strzela dalej
-		// W TUI musimy pozwolić pętli obsłużyć rendering, więc wywołamy to w następnym cyklu lub rekurencyjnie?
-		// Rekurencja zablokuje UI. Lepiej nie.
-		// Ale w 'Update' mamy 'if m.state == StateBotTurn'.
-		// Jeśli zostawimy StateBotTurn, to w następnej klatce znowu wejdzie tutaj.
-		// Więc jest OK.
+		// Bot trafia - ma dodatkowy ruch (zasady Battleship często tak mówią, a to też przyspiesza grę bota)
+		// Tutaj trzymamy się zasady, że jak trafisz to strzelasz dalej.
+		m.log("Bot hit! Bot fires again...")
 	}
 }
 
 func (m *Model) syncBotView() {
-	// Synchronizuje widok gracza z faktycznym stanem planszy bota (dla pól odkrytych)
-	// Służy głównie do przeniesienia efektu "MarkSurroundingAsMiss" i "Sunk" na widok gracza
+	// Kopiuje stany Sunk i Miss (autouzupełnione) z botBoard do botView
 	for y := 0; y < game.BoardSize; y++ {
 		for x := 0; x < game.BoardSize; x++ {
 			realState := m.botBoard.Grid[y][x].State
-			if realState == game.CellSunk || (realState == game.CellMiss && m.botView[y][x] == game.CellWater && isNearSunk(m.botBoard, x, y)) {
-				m.botView[y][x] = realState
+			currentView := m.botView[y][x]
+
+			// Jeśli pole jest zatopione, pokaż to
+			if realState == game.CellSunk {
+				m.botView[y][x] = game.CellSunk
+			}
+			// Jeśli pole jest pudłem, a my go nie widzieliśmy (autouzupełnianie), pokaż to
+			if realState == game.CellMiss && currentView == game.CellWater {
+				// Sprawdź czy to autouzupełnianie (sąsiad Sunk)
+				if isNearSunk(m.botBoard, x, y) {
+					m.botView[y][x] = game.CellMiss
+				}
 			}
 		}
 	}
 }
+
 func isNearSunk(b *game.Board, x, y int) bool {
-	// Sprawdza czy pole jest miss z powodu autouzupełniania (czyli czy sąsiaduje z Sunk)
-	// To jest pewne uproszczenie wizualne.
-	// W logic.go autouzupełnianie ustawia CellMiss.
-	// Jeśli w botBoard jest CellMiss, a w botView było Water, to znaczy że to 'Miss' powstało automatycznie (bo gracz tam nie strzelał).
-	// Ale gracz mógł wcześniej tam strzelić i było Pudło.
-	// Musimy rozróżnić.
-	// W sumie: jeśli na botBoard jest Miss/Hit/Sunk, a my to właśnie odkryliśmy (np. przez zatopienie), to pokazujemy.
-	// Ale nie chcemy pokazywać statków (Ship).
-	// W funkcji Fire() autouzupełnianie zmienia Water -> Miss.
-	// Więc możemy bezpiecznie przepisać wszystko co nie jest Ship i nie jest Water (chyba że było Water).
+	// Sprawdź czy (x,y) sąsiaduje z jakimś Sunk (w tym po skosie)
+	for dy := -1; dy <= 1; dy++ {
+		for dx := -1; dx <= 1; dx++ {
+			nx, ny := x+dx, y+dy
+			if nx >= 0 && nx < game.BoardSize && ny >= 0 && ny < game.BoardSize {
+				if b.Grid[ny][nx].State == game.CellSunk {
+					return true
+				}
+			}
+		}
+	}
 	return false
 }
 
-
 func (m Model) View() string {
 	if m.width == 0 {
-		return "Loading..."
+		return "Initializing Quantum Engine..."
 	}
 
 	var s strings.Builder
 
-	s.WriteString(titleStyle.Render("BATTLESHIP 2.0 - UNBEATABLE AI"))
+	s.WriteString(titleStyle.Render(" BATTLESHIP 2.0 :: QUANTUM HUNTER EDITION "))
 	s.WriteString("\n\n")
 
-	// Renderowanie plansz obok siebie
-	playerView := renderBoard(m.playerBoard.Grid, false, -1, -1)
-	botViewStr := renderBoardView(m.botView, true, m.cursorX, m.cursorY)
+	playerView := renderBoard(m.playerBoard.Grid, true, -1, -1) // Gracz widzi swoje statki
+	// Gracz widzi botView (swoją wiedzę o planszy bota), kursor jest aktywny
+	botViewStr := renderBoardView(m.botView, m.state == StatePlayerTurn, m.cursorX, m.cursorY)
 
 	boards := lipgloss.JoinHorizontal(lipgloss.Top,
-		boardBorderStyle.Render(lipgloss.JoinVertical(lipgloss.Center, "PLAYER FLEET", playerView)),
+		boardBorderStyle.Render(lipgloss.JoinVertical(lipgloss.Center, "YOUR FLEET", playerView)),
 		"    ",
-		boardBorderStyle.Render(lipgloss.JoinVertical(lipgloss.Center, "OPPONENT SECTOR", botViewStr)),
+		boardBorderStyle.Render(lipgloss.JoinVertical(lipgloss.Center, "TARGET SECTOR", botViewStr)),
 	)
 
 	s.WriteString(boards)
 	s.WriteString("\n\n")
 
-	// Logi
-	s.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#AAA")).Render("LOGS:"))
+	s.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#AAA")).Bold(true).Render("COMBAT LOG:"))
 	s.WriteString("\n")
-	startLog := 0
-	if len(m.logs) > 5 {
-		startLog = len(m.logs) - 5
+
+	// Pokaż ostatnie 6 logów
+	limit := 6
+	start := 0
+	if len(m.logs) > limit {
+		start = len(m.logs) - limit
 	}
-	for i := startLog; i < len(m.logs); i++ {
-		s.WriteString(fmt.Sprintf("> %s\n", m.logs[i]))
+	for i := start; i < len(m.logs); i++ {
+		line := m.logs[i]
+		// Kolorowanie logów
+		if strings.Contains(line, "Hit") || strings.Contains(line, "targets") {
+			s.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#FFA500")).Render("> "+line) + "\n")
+		} else if strings.Contains(line, "Sunk") || strings.Contains(line, "defeated") || strings.Contains(line, "Game Over") {
+			s.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#F00")).Bold(true).Render("> "+line) + "\n")
+		} else {
+			s.WriteString(logStyle.Render("> "+line) + "\n")
+		}
 	}
 
 	s.WriteString("\n")
+
 	if m.state == StateGameOver {
 		resColor := lipgloss.Color("#0F0")
 		if m.winner == "BOT" { resColor = lipgloss.Color("#F00") }
 		s.WriteString(lipgloss.NewStyle().Foreground(resColor).Bold(true).Render(fmt.Sprintf("GAME OVER - %s WINS!", m.winner)))
 		s.WriteString("\nPress Enter to restart.")
 	} else if m.state == StateBotTurn {
-		s.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("208")).Render("Bot is thinking..."))
+		s.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("208")).Render("Quantum AI is analyzing timelines..."))
 	} else {
-		s.WriteString(subtleStyle.Render("Arrows: Move | Enter: Fire | Q: Quit"))
+		s.WriteString(subtleStyle.Render("ARROWS/HJKL: Move | ENTER/SPACE: Fire | ?: Legend | Q: Quit"))
 	}
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, s.String())
@@ -307,6 +332,7 @@ func renderBoard(grid [][]game.Cell, showShips bool, curX, curY int) string {
 	// Nagłówek kolumn
 	s.WriteString("  ")
 	for i := 0; i < len(grid); i++ {
+		if i < 9 { s.WriteString(" ") }
 		s.WriteString(fmt.Sprintf("%d ", i+1))
 	}
 	s.WriteString("\n")
@@ -324,13 +350,8 @@ func renderBoard(grid [][]game.Cell, showShips bool, curX, curY int) string {
 				} else {
 					char = waterStyle.Render()
 				}
-			case game.CellShip: // To teoretycznie nie występuje jako stan widoczny (to jest ukryte pod Water z ShipID, albo Hit)
-				// Ale w mojej logice w logic.go, CellShip oznacza "żywy statek".
-				if showShips {
-					char = shipStyle.Render()
-				} else {
-					char = waterStyle.Render()
-				}
+			case game.CellShip: // Stan wewnętrzny
+				if showShips { char = shipStyle.Render() } else { char = waterStyle.Render() }
 			case game.CellHit:
 				char = hitStyle.Render()
 			case game.CellMiss:
@@ -339,11 +360,9 @@ func renderBoard(grid [][]game.Cell, showShips bool, curX, curY int) string {
 				char = sunkStyle.Render()
 			}
 
-			// Kursor (tylko dla prawej planszy zwykle, ale tu funkcja generyczna)
 			if x == curX && y == curY {
 				char = cursorStyle.Render(char)
 			}
-
 			s.WriteString(char + " ")
 		}
 		s.WriteString("\n")
@@ -352,14 +371,10 @@ func renderBoard(grid [][]game.Cell, showShips bool, curX, curY int) string {
 }
 
 func renderBoardView(view [][]game.CellState, isCursorActive bool, curX, curY int) string {
-	// Konwersja view na grid dla renderera
-	// Potrzebujemy tymczasowej struktury lub duplikacji kodu renderera.
-	// Zduplikuję logicznie dla prostoty.
 	var s strings.Builder
-
 	s.WriteString("  ")
 	for i := 0; i < len(view); i++ {
-		if i < 9 { s.WriteString(" ") } // wyrównanie
+		if i < 9 { s.WriteString(" ") }
 		s.WriteString(fmt.Sprintf("%d ", i+1))
 	}
 	s.WriteString("\n")
@@ -370,7 +385,7 @@ func renderBoardView(view [][]game.CellState, isCursorActive bool, curX, curY in
 			state := view[y][x]
 			char := ""
 			switch state {
-			case game.CellWater: // Unknown
+			case game.CellWater:
 				char = waterStyle.Render()
 			case game.CellHit:
 				char = hitStyle.Render()
